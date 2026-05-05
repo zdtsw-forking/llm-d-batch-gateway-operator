@@ -95,19 +95,13 @@ type SecretReference struct {
 // --- File Storage ---
 
 // FileStorageSpec configures the file storage backend.
-// +kubebuilder:validation:XValidation:rule="self.type != 'fs' || has(self.fs)",message="fileStorage.fs must be set when type is 'fs'"
-// +kubebuilder:validation:XValidation:rule="self.type != 's3' || !has(self.fs)",message="fileStorage.fs must not be set when type is 's3'"
+// Exactly one of s3 or fs must be set.
+// +kubebuilder:validation:XValidation:rule="has(self.s3) != has(self.fs)",message="exactly one of fileStorage.s3 or fileStorage.fs must be set"
 type FileStorageSpec struct {
-	// Type selects the storage backend. Use 's3' for any S3-compatible object store,
-	// or 'fs' for a PersistentVolumeClaim-backed filesystem.
-	// +kubebuilder:validation:Enum=fs;s3
-	// +kubebuilder:default=s3
-	Type string `json:"type,omitempty"`
-
-	// S3 configures S3-compatible object storage. Required when type is 's3'.
+	// S3 configures S3-compatible object storage. Mutually exclusive with fs.
 	S3 *S3StorageSpec `json:"s3,omitempty"`
 
-	// FS configures PVC-backed filesystem storage. Required when type is 'fs'.
+	// FS configures PVC-backed filesystem storage. Mutually exclusive with s3.
 	FS *FSStorageSpec `json:"fs,omitempty"`
 
 	// Retry configures retry behaviour for transient file storage errors.

@@ -237,8 +237,8 @@ spec:
                   input/output files. If omitted, S3 defaults are used.
                 properties:
                   fs:
-                    description: FS configures PVC-backed filesystem storage. Required
-                      when type is 'fs'.
+                    description: FS configures PVC-backed filesystem storage. Mutually
+                      exclusive with s3.
                     properties:
                       basePath:
                         description: BasePath is the root directory inside the PVC
@@ -272,8 +272,8 @@ spec:
                         type: integer
                     type: object
                   s3:
-                    description: S3 configures S3-compatible object storage. Required
-                      when type is 's3'.
+                    description: S3 configures S3-compatible object storage. Mutually
+                      exclusive with fs.
                     properties:
                       accessKeyId:
                         description: |-
@@ -304,21 +304,11 @@ spec:
                           by some S3-compatible stores).
                         type: boolean
                     type: object
-                  type:
-                    default: s3
-                    description: |-
-                      Type selects the storage backend. Use 's3' for any S3-compatible object store,
-                      or 'fs' for a PersistentVolumeClaim-backed filesystem.
-                    enum:
-                    - fs
-                    - s3
-                    type: string
                 type: object
                 x-kubernetes-validations:
-                - message: fileStorage.fs must be set when type is 'fs'
-                  rule: self.type != 'fs' || has(self.fs)
-                - message: fileStorage.fs must not be set when type is 's3'
-                  rule: self.type != 's3' || !has(self.fs)
+                - message: exactly one of fileStorage.s3 or fileStorage.fs must be
+                    set
+                  rule: has(self.s3) != has(self.fs)
               gc:
                 description: GC configures the garbage-collector component that expires
                   old jobs and files.

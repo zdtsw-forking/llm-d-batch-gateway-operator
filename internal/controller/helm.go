@@ -90,10 +90,9 @@ func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway) (map[string]interface{}
 	}
 
 	if gw.Spec.FileStorage != nil {
-		fc := map[string]interface{}{
-			"type": gw.Spec.FileStorage.Type,
-		}
+		fc := map[string]interface{}{}
 		if gw.Spec.FileStorage.S3 != nil {
+			fc["type"] = "s3"
 			s3 := gw.Spec.FileStorage.S3
 			s3Vals := map[string]interface{}{}
 			setIfNotEmpty(s3Vals, "region", s3.Region)
@@ -107,6 +106,7 @@ func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway) (map[string]interface{}
 			fc["s3"] = s3Vals
 		}
 		if gw.Spec.FileStorage.FS != nil {
+			fc["type"] = "fs"
 			fs := gw.Spec.FileStorage.FS
 			fsVals := map[string]interface{}{}
 			setIfNotEmpty(fsVals, "basePath", fs.BasePath)
