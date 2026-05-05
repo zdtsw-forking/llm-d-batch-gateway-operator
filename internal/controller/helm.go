@@ -31,8 +31,8 @@ func NewHelmRenderer(chartPath string) (*HelmRenderer, error) {
 	return &HelmRenderer{chart: c}, nil
 }
 
-func (h *HelmRenderer) RenderChart(gw *batchv1alpha1.LLMBatchGateway) ([]*unstructured.Unstructured, error) {
-	vals, err := specToHelmValues(gw)
+func (h *HelmRenderer) RenderChart(gw *batchv1alpha1.LLMBatchGateway, secretName string) ([]*unstructured.Unstructured, error) {
+	vals, err := specToHelmValues(gw, secretName)
 	if err != nil {
 		return nil, fmt.Errorf("converting spec to helm values: %w", err)
 	}
@@ -78,12 +78,12 @@ func (h *HelmRenderer) RenderChart(gw *batchv1alpha1.LLMBatchGateway) ([]*unstru
 	return objects, nil
 }
 
-func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway) (map[string]interface{}, error) {
+func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway, secretName string) (map[string]interface{}, error) {
 	vals := map[string]interface{}{}
 
 	// --- Global ---
 	global := map[string]interface{}{
-		"secretName": gw.Spec.SecretRef.Name,
+		"secretName": secretName,
 		"dbClient": map[string]interface{}{
 			"type": gw.Spec.DBBackend,
 		},

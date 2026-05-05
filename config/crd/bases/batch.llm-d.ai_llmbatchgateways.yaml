@@ -396,9 +396,7 @@ spec:
                       - name
                       type: object
                     type: array
-                    x-kubernetes-list-map-keys:
-                    - name
-                    x-kubernetes-list-type: map
+                    x-kubernetes-list-type: atomic
                 type: object
               monitoring:
                 description: Monitoring enables Prometheus ServiceMonitor and PodMonitor
@@ -701,13 +699,29 @@ spec:
                 description: |-
                   SecretRef references the Kubernetes Secret that holds runtime credentials
                   (database URL, S3 keys, inference API key, etc.).
+
+                  When Namespace is omitted the Secret must reside in the same namespace as
+                  the LLMBatchGateway CR.
+
+                  When Namespace is set to a different namespace, a Gateway API ReferenceGrant
+                  must exist in that namespace permitting this LLMBatchGateway to reference
+                  the Secret. The controller will copy the Secret into the CR's namespace
+                  under a managed name (<gateway-name>-credentials) so that the workload
+                  Pods can mount it.
+
+                  SecretRef is immutable after creation. To use a different Secret, delete
+                  and recreate the LLMBatchGateway CR.
                 properties:
                   name:
-                    description: Name is the name of the Secret.
+                    description: name is unique within a namespace to reference a
+                      secret resource.
                     type: string
-                required:
-                - name
+                  namespace:
+                    description: namespace defines the space within which the secret
+                      name must be unique.
+                    type: string
                 type: object
+                x-kubernetes-map-type: atomic
               tls:
                 description: TLS configures TLS termination for the API server.
                 properties:
@@ -735,6 +749,7 @@ spec:
                         description: IssuerName is the name of the cert-manager Issuer
                           or ClusterIssuer.
                         maxLength: 253
+                        minLength: 1
                         type: string
                     required:
                     - issuerName
@@ -765,6 +780,9 @@ spec:
             - processor
             - secretRef
             type: object
+            x-kubernetes-validations:
+            - message: spec.secretRef.name is required
+              rule: self.secretRef.name != ''
           status:
             description: Status defines the observed state of LLMBatchGateway.
             properties:

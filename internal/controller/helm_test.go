@@ -10,6 +10,12 @@ import (
 	batchv1alpha1 "github.com/opendatahub-io/llm-d-batch-gateway-operator/api/v1alpha1"
 )
 
+// testSecretName returns the secret name for use in tests, simulating what
+// resolveSecret returns in the same-namespace case.
+func testSecretName(gw *batchv1alpha1.LLMBatchGateway) string {
+	return gw.Spec.SecretRef.Name
+}
+
 func TestSplitImage(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -88,7 +94,7 @@ func TestSpecToHelmValues(t *testing.T) {
 			Namespace: "test-ns",
 		},
 		Spec: batchv1alpha1.LLMBatchGatewaySpec{
-			SecretRef: batchv1alpha1.SecretReference{
+			SecretRef: corev1.SecretReference{
 				Name: "my-secret",
 			},
 			DBBackend: "postgresql",
@@ -123,7 +129,7 @@ func TestSpecToHelmValues(t *testing.T) {
 		},
 	}
 
-	vals, err := specToHelmValues(gw)
+	vals, err := specToHelmValues(gw, testSecretName(gw))
 	if err != nil {
 		t.Fatalf("specToHelmValues() error: %v", err)
 	}
@@ -208,7 +214,7 @@ func TestSpecToHelmValues_Monitoring(t *testing.T) {
 	gw := minimalGateway()
 	gw.Spec.Monitoring = &batchv1alpha1.MonitoringSpec{Enabled: true}
 
-	vals, err := specToHelmValues(gw)
+	vals, err := specToHelmValues(gw, testSecretName(gw))
 	if err != nil {
 		t.Fatalf("specToHelmValues() error: %v", err)
 	}
@@ -240,7 +246,7 @@ func TestSpecToHelmValues_TLS(t *testing.T) {
 		},
 	}
 
-	vals, err := specToHelmValues(gw)
+	vals, err := specToHelmValues(gw, testSecretName(gw))
 	if err != nil {
 		t.Fatalf("specToHelmValues() error: %v", err)
 	}
@@ -274,7 +280,7 @@ func TestSpecToHelmValues_HTTPRoute(t *testing.T) {
 		},
 	}
 
-	vals, err := specToHelmValues(gw)
+	vals, err := specToHelmValues(gw, testSecretName(gw))
 	if err != nil {
 		t.Fatalf("specToHelmValues() error: %v", err)
 	}
@@ -329,7 +335,7 @@ func TestRenderChart(t *testing.T) {
 	}
 
 	gw := minimalGateway()
-	objects, err := renderer.RenderChart(gw)
+	objects, err := renderer.RenderChart(gw, testSecretName(gw))
 	if err != nil {
 		t.Fatalf("RenderChart() error: %v", err)
 	}
@@ -381,7 +387,7 @@ func TestRenderChart_WithMonitoring(t *testing.T) {
 	gw := minimalGateway()
 	gw.Spec.Monitoring = &batchv1alpha1.MonitoringSpec{Enabled: true}
 
-	objects, err := renderer.RenderChart(gw)
+	objects, err := renderer.RenderChart(gw, testSecretName(gw))
 	if err != nil {
 		t.Fatalf("RenderChart() error: %v", err)
 	}
@@ -416,7 +422,7 @@ func TestSpecToHelmValues_Logging(t *testing.T) {
 		Logging: &batchv1alpha1.LoggingConfig{Verbosity: 4},
 	}
 
-	vals, err := specToHelmValues(gw)
+	vals, err := specToHelmValues(gw, testSecretName(gw))
 	if err != nil {
 		t.Fatalf("specToHelmValues() error: %v", err)
 	}
@@ -457,7 +463,7 @@ func minimalGateway() *batchv1alpha1.LLMBatchGateway {
 			Namespace: "default",
 		},
 		Spec: batchv1alpha1.LLMBatchGatewaySpec{
-			SecretRef: batchv1alpha1.SecretReference{
+			SecretRef: corev1.SecretReference{
 				Name: "batch-gateway-secrets",
 			},
 			DBBackend: "postgresql",

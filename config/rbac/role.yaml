@@ -30,7 +30,11 @@ rules:
   resources:
   - secrets
   verbs:
+  - create
   - get
+  - list
+  - patch
+  - watch
 - apiGroups:
   - apps
   resources:
@@ -90,6 +94,14 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - referencegrants
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - monitoring.coreos.com
