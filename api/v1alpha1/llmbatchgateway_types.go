@@ -139,10 +139,12 @@ type S3StorageSpec struct {
 // FSStorageSpec configures PVC-backed filesystem storage.
 type FSStorageSpec struct {
 	// BasePath is the root directory inside the PVC where files are stored.
+	// +kubebuilder:validation:MaxLength=4096
 	BasePath string `json:"basePath,omitempty"`
 
-	// PVCName is the name of the PersistentVolumeClaim to mount.
-	PVCName string `json:"pvcName,omitempty"`
+	// ClaimName is the name of the PersistentVolumeClaim to mount.
+	// +kubebuilder:validation:MaxLength=253
+	ClaimName string `json:"claimName,omitempty"`
 }
 
 // FileRetrySpec configures retry behaviour for transient file storage errors.

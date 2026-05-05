@@ -110,7 +110,7 @@ func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway) (map[string]interface{}
 			fs := gw.Spec.FileStorage.FS
 			fsVals := map[string]interface{}{}
 			setIfNotEmpty(fsVals, "basePath", fs.BasePath)
-			setIfNotEmpty(fsVals, "pvcName", fs.PVCName)
+			setIfNotEmpty(fsVals, "pvcName", fs.ClaimName)
 			fc["fs"] = fsVals
 		}
 		if gw.Spec.FileStorage.Retry != nil {

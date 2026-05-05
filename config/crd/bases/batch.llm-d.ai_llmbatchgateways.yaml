@@ -243,10 +243,12 @@ spec:
                       basePath:
                         description: BasePath is the root directory inside the PVC
                           where files are stored.
+                        maxLength: 4096
                         type: string
-                      pvcName:
-                        description: PVCName is the name of the PersistentVolumeClaim
+                      claimName:
+                        description: ClaimName is the name of the PersistentVolumeClaim
                           to mount.
+                        maxLength: 253
                         type: string
                     type: object
                   retry:
