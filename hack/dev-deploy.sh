@@ -52,7 +52,7 @@ detect_container_tool() {
 check_prerequisites() {
     step "Checking prerequisites..."
     local missing=()
-    for cmd in kubectl helm kind kustomize; do
+    for cmd in kubectl helm kind kustomize curl; do
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
     done
     if [ ${#missing[@]} -gt 0 ]; then
@@ -194,6 +194,30 @@ EOF
 
     kubectl rollout status deployment minio -n "${NAMESPACE}" --timeout=120s
     log "MinIO installed."
+}
+
+install_gateway_api_crds() {
+    step "Installing Gateway API CRDs..."
+
+    local version="${GATEWAY_API_VERSION:-}"
+    if [ -z "${version}" ]; then
+        local curl_args=(-fsSL)
+        if [ -n "${GITHUB_TOKEN:-}" ]; then
+            curl_args+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+        fi
+        version=$(curl "${curl_args[@]}" https://api.github.com/repos/kubernetes-sigs/gateway-api/releases/latest \
+            | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
+    fi
+
+    if [ -z "${version}" ]; then
+        die "Could not determine Gateway API release version (set GATEWAY_API_VERSION to override)."
+    fi
+
+    log "Gateway API version: ${version}"
+
+    kubectl apply -f "https://github.com/kubernetes-sigs/gateway-api/releases/download/${version}/standard-install.yaml"
+
+    log "Gateway API CRDs installed."
 }
 
 install_vllm_sim() {
@@ -427,6 +451,7 @@ main() {
     check_prerequisites
     build_operator
     ensure_cluster
+    install_gateway_api_crds
     install_postgresql
     install_redis
     install_minio

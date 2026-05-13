@@ -25,6 +25,7 @@ generate:
 .PHONY: test
 test: generate manifests setup-envtest
 	KUBEBUILDER_ASSETS="$$($(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
+	CGO_ENABLED=1 \
 	go test -v ./... -race -count=1
 
 .PHONY: setup-envtest

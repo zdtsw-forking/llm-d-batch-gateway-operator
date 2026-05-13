@@ -21,7 +21,7 @@ func newTestGateway(name, namespace string) *batchv1alpha1.LLMBatchGateway {
 			Namespace: namespace,
 		},
 		Spec: batchv1alpha1.LLMBatchGatewaySpec{
-			SecretRef: batchv1alpha1.SecretReference{Name: "test-secrets"},
+			SecretRef: corev1.SecretReference{Name: "test-secrets"},
 			DBBackend: "postgresql",
 			FileStorage: &batchv1alpha1.FileStorageSpec{
 				S3: &batchv1alpha1.S3StorageSpec{
@@ -57,11 +57,7 @@ func TestReconcile(t *testing.T) {
 		t.Fatalf("NewHelmRenderer() error: %v", err)
 	}
 
-	reconciler := &LLMBatchGatewayReconciler{
-		Client:       k8sClient,
-		Scheme:       k8sClient.Scheme(),
-		HelmRenderer: helmRenderer,
-	}
+	reconciler := NewLLMBatchGatewayReconciler(k8sClient, k8sClient.Scheme(), helmRenderer)
 
 	t.Run("creates all child resources", func(t *testing.T) {
 		gw := newTestGateway("test-create", "default")
@@ -421,6 +417,91 @@ func TestReconcile(t *testing.T) {
 		t.Error("missing Ready condition")
 	})
 
+	t.Run("sets ReferenceNotPermitted when no ReferenceGrant exists", func(t *testing.T) {
+		gw := newTestGateway("test-refnotpermitted", "default")
+		// Cross-namespace secretRef — no ReferenceGrant is present.
+		gw.Spec.SecretRef = corev1.SecretReference{Name: "src-secret", Namespace: "other-ns"}
+		if err := k8sClient.Create(ctx, gw); err != nil {
+			t.Fatalf("creating CR: %v", err)
+		}
+		t.Cleanup(func() { _ = k8sClient.Delete(ctx, gw) })
+
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace},
+		})
+		if err != nil {
+			t.Fatalf("Reconcile() should not return error for permanent condition, got: %v", err)
+		}
+
+		var updated batchv1alpha1.LLMBatchGateway
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}, &updated); err != nil {
+			t.Fatalf("getting updated CR: %v", err)
+		}
+		for _, c := range updated.Status.Conditions {
+			if c.Type == ConditionReady {
+				if c.Status != metav1.ConditionFalse {
+					t.Errorf("Ready status = %v, want False", c.Status)
+				}
+				if c.Reason != "ReferenceNotPermitted" {
+					t.Errorf("Ready reason = %q, want ReferenceNotPermitted", c.Reason)
+				}
+				return
+			}
+		}
+		t.Error("missing Ready condition")
+	})
+
+	t.Run("sets SecretRefImmutable when managed copy annotation mismatches", func(t *testing.T) {
+		gwName := "test-secretrefimmutable"
+
+		// Create the managed copy with an annotation pointing at a different source.
+		existingCopy := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      gwName + managedSecretSuffix,
+				Namespace: "default",
+				Annotations: map[string]string{
+					"batch.llm-d.ai/copied-from": "other-ns/old-secret",
+				},
+			},
+		}
+		if err := k8sClient.Create(ctx, existingCopy); err != nil {
+			t.Fatalf("creating pre-existing managed copy: %v", err)
+		}
+		t.Cleanup(func() { _ = k8sClient.Delete(ctx, existingCopy) })
+
+		gw := newTestGateway(gwName, "default")
+		// Cross-namespace secretRef pointing at a different secret than the copy.
+		gw.Spec.SecretRef = corev1.SecretReference{Name: "new-secret", Namespace: "other-ns"}
+		if err := k8sClient.Create(ctx, gw); err != nil {
+			t.Fatalf("creating CR: %v", err)
+		}
+		t.Cleanup(func() { _ = k8sClient.Delete(ctx, gw) })
+
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace},
+		})
+		if err != nil {
+			t.Fatalf("Reconcile() should not return error for permanent condition, got: %v", err)
+		}
+
+		var updated batchv1alpha1.LLMBatchGateway
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}, &updated); err != nil {
+			t.Fatalf("getting updated CR: %v", err)
+		}
+		for _, c := range updated.Status.Conditions {
+			if c.Type == ConditionReady {
+				if c.Status != metav1.ConditionFalse {
+					t.Errorf("Ready status = %v, want False", c.Status)
+				}
+				if c.Reason != "SecretRefImmutable" {
+					t.Errorf("Ready reason = %q, want SecretRefImmutable", c.Reason)
+				}
+				return
+			}
+		}
+		t.Error("missing Ready condition")
+	})
+
 	t.Run("does not delete resources owned by a different CR", func(t *testing.T) {
 		gwA := newTestGateway("test-orphan-a", "default")
 		gwA.Spec.Grafana = &batchv1alpha1.GrafanaSpec{Enabled: true}
@@ -481,6 +562,44 @@ func TestReconcile(t *testing.T) {
 			t.Errorf("CR B configmap count changed from %d to %d", cmCountB, cmCountBAfter)
 		}
 	})
+}
+
+func TestConditionHelpers(t *testing.T) {
+	if got := conditionStatus(true); got != metav1.ConditionTrue {
+		t.Errorf("conditionStatus(true) = %v, want True", got)
+	}
+	if got := conditionStatus(false); got != metav1.ConditionFalse {
+		t.Errorf("conditionStatus(false) = %v, want False", got)
+	}
+	if got := conditionReason(true, "Yes", "No"); got != "Yes" {
+		t.Errorf("conditionReason(true) = %v, want Yes", got)
+	}
+	if got := conditionReason(false, "Yes", "No"); got != "No" {
+		t.Errorf("conditionReason(false) = %v, want No", got)
+	}
+	if got := conditionMessage(true, "ok", "bad"); got != "ok" {
+		t.Errorf("conditionMessage(true) = %v, want ok", got)
+	}
+	if got := conditionMessage(false, "ok", "bad"); got != "bad" {
+		t.Errorf("conditionMessage(false) = %v, want bad", got)
+	}
+}
+
+func TestIsOwnedBy(t *testing.T) {
+	gw := newTestGateway("gw", "default")
+	gw.UID = "test-uid"
+
+	owned := &corev1.ConfigMap{}
+	owned.OwnerReferences = []metav1.OwnerReference{{UID: gw.UID}}
+
+	notOwned := &corev1.ConfigMap{}
+
+	if !isOwnedBy(owned, gw) {
+		t.Error("isOwnedBy: expected true for owned object")
+	}
+	if isOwnedBy(notOwned, gw) {
+		t.Error("isOwnedBy: expected false for unowned object")
+	}
 }
 
 func isOwnedByUID(refs []metav1.OwnerReference, uid types.UID) bool {

@@ -2,7 +2,9 @@ package controller
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"k8s.io/client-go/kubernetes/scheme"
@@ -11,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	batchv1alpha1 "github.com/opendatahub-io/llm-d-batch-gateway-operator/api/v1alpha1"
 )
@@ -28,9 +31,16 @@ func TestMain(m *testing.M) {
 		logf.Log.Error(err, "failed to add scheme")
 		os.Exit(1)
 	}
+	if err := gatewayv1beta1.Install(scheme.Scheme); err != nil {
+		logf.Log.Error(err, "failed to add gateway-api scheme")
+		os.Exit(1)
+	}
 
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		CRDDirectoryPaths: []string{
+			filepath.Join("..", "..", "config", "crd", "bases"),
+			gatewayAPICRDPath(),
+		},
 		ErrorIfCRDPathMissing: true,
 	}
 
@@ -58,6 +68,23 @@ func TestMain(m *testing.M) {
 	}
 
 	os.Exit(code)
+}
+
+// gatewayAPICRDPath returns the path to the gateway-api standard CRDs by
+// asking the Go toolchain where the module is cached. This avoids hardcoding
+// the version.
+func gatewayAPICRDPath() string {
+	cmd := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "sigs.k8s.io/gateway-api")
+	out, err := cmd.Output()
+	if err != nil {
+		var stderr string
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = string(ee.Stderr)
+		}
+		logf.Log.Error(err, "failed to locate sigs.k8s.io/gateway-api module", "stderr", stderr)
+		return ""
+	}
+	return filepath.Join(strings.TrimSpace(string(out)), "config", "crd", "standard")
 }
 
 func getFirstFoundEnvTestBinaryDir() string {

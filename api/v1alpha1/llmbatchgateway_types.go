@@ -38,11 +38,24 @@ type LLMBatchGatewayList struct {
 }
 
 // LLMBatchGatewaySpec defines the desired state of the batch gateway deployment.
+// +kubebuilder:validation:XValidation:rule="self.secretRef.name != ''",message="spec.secretRef.name is required"
 type LLMBatchGatewaySpec struct {
 	// SecretRef references the Kubernetes Secret that holds runtime credentials
 	// (database URL, S3 keys, inference API key, etc.).
+	//
+	// When Namespace is omitted the Secret must reside in the same namespace as
+	// the LLMBatchGateway CR.
+	//
+	// When Namespace is set to a different namespace, a Gateway API ReferenceGrant
+	// must exist in that namespace permitting this LLMBatchGateway to reference
+	// the Secret. The controller will copy the Secret into the CR's namespace
+	// under a managed name (<gateway-name>-credentials) so that the workload
+	// Pods can mount it.
+	//
+	// SecretRef is immutable after creation. To use a different Secret, delete
+	// and recreate the LLMBatchGateway CR.
 	// +kubebuilder:validation:Required
-	SecretRef SecretReference `json:"secretRef"`
+	SecretRef corev1.SecretReference `json:"secretRef"`
 
 	// DBBackend selects the database backend used for job state storage.
 	// +kubebuilder:validation:Enum=redis;postgresql;valkey
@@ -82,14 +95,6 @@ type LLMBatchGatewaySpec struct {
 
 	// PrometheusRule configures a PrometheusRule resource with pre-built alerting rules.
 	PrometheusRule *PrometheusRuleSpec `json:"prometheusRule,omitempty"`
-}
-
-// SecretReference is a reference to a Kubernetes Secret in the same namespace
-// as the LLMBatchGateway CR.
-type SecretReference struct {
-	// Name is the name of the Secret.
-	// +kubebuilder:validation:Required
-	Name string `json:"name"`
 }
 
 // --- File Storage ---
@@ -452,6 +457,7 @@ type TLSSpec struct {
 type CertManagerSpec struct {
 	// IssuerName is the name of the cert-manager Issuer or ClusterIssuer.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	IssuerName string `json:"issuerName"`
 
@@ -476,8 +482,7 @@ type HTTPRouteSpec struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 
 	// ParentRefs is the list of Gateways this HTTPRoute should attach to.
-	// +listType=map
-	// +listMapKey=name
+	// +listType=atomic
 	ParentRefs []ParentReference `json:"parentRefs,omitempty"`
 }
 

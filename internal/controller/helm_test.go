@@ -10,6 +10,12 @@ import (
 	batchv1alpha1 "github.com/opendatahub-io/llm-d-batch-gateway-operator/api/v1alpha1"
 )
 
+// testSecretName returns the secret name for use in tests, simulating what
+// resolveSecret returns in the same-namespace case.
+func testSecretName(gw *batchv1alpha1.LLMBatchGateway) string {
+	return gw.Spec.SecretRef.Name
+}
+
 func TestSplitImage(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -88,7 +94,7 @@ func TestSpecToHelmValues(t *testing.T) {
 			Namespace: "test-ns",
 		},
 		Spec: batchv1alpha1.LLMBatchGatewaySpec{
-			SecretRef: batchv1alpha1.SecretReference{
+			SecretRef: corev1.SecretReference{
 				Name: "my-secret",
 			},
 			DBBackend: "postgresql",
@@ -123,7 +129,7 @@ func TestSpecToHelmValues(t *testing.T) {
 		},
 	}
 
-	vals, err := specToHelmValues(gw)
+	vals, err := specToHelmValues(gw, testSecretName(gw))
 	if err != nil {
 		t.Fatalf("specToHelmValues() error: %v", err)
 	}
@@ -208,7 +214,7 @@ func TestSpecToHelmValues_Monitoring(t *testing.T) {
 	gw := minimalGateway()
 	gw.Spec.Monitoring = &batchv1alpha1.MonitoringSpec{Enabled: true}
 
-	vals, err := specToHelmValues(gw)
+	vals, err := specToHelmValues(gw, testSecretName(gw))
 	if err != nil {
 		t.Fatalf("specToHelmValues() error: %v", err)
 	}
@@ -240,7 +246,7 @@ func TestSpecToHelmValues_TLS(t *testing.T) {
 		},
 	}
 
-	vals, err := specToHelmValues(gw)
+	vals, err := specToHelmValues(gw, testSecretName(gw))
 	if err != nil {
 		t.Fatalf("specToHelmValues() error: %v", err)
 	}
@@ -274,7 +280,7 @@ func TestSpecToHelmValues_HTTPRoute(t *testing.T) {
 		},
 	}
 
-	vals, err := specToHelmValues(gw)
+	vals, err := specToHelmValues(gw, testSecretName(gw))
 	if err != nil {
 		t.Fatalf("specToHelmValues() error: %v", err)
 	}
@@ -329,7 +335,7 @@ func TestRenderChart(t *testing.T) {
 	}
 
 	gw := minimalGateway()
-	objects, err := renderer.RenderChart(gw)
+	objects, err := renderer.RenderChart(gw, testSecretName(gw))
 	if err != nil {
 		t.Fatalf("RenderChart() error: %v", err)
 	}
@@ -381,7 +387,7 @@ func TestRenderChart_WithMonitoring(t *testing.T) {
 	gw := minimalGateway()
 	gw.Spec.Monitoring = &batchv1alpha1.MonitoringSpec{Enabled: true}
 
-	objects, err := renderer.RenderChart(gw)
+	objects, err := renderer.RenderChart(gw, testSecretName(gw))
 	if err != nil {
 		t.Fatalf("RenderChart() error: %v", err)
 	}
@@ -416,7 +422,7 @@ func TestSpecToHelmValues_Logging(t *testing.T) {
 		Logging: &batchv1alpha1.LoggingConfig{Verbosity: 4},
 	}
 
-	vals, err := specToHelmValues(gw)
+	vals, err := specToHelmValues(gw, testSecretName(gw))
 	if err != nil {
 		t.Fatalf("specToHelmValues() error: %v", err)
 	}
@@ -449,6 +455,400 @@ func TestSpecToHelmValues_Logging(t *testing.T) {
 	})
 }
 
+func TestSpecToHelmValues_FSStorage(t *testing.T) {
+	gw := minimalGateway()
+	gw.Spec.FileStorage = &batchv1alpha1.FileStorageSpec{
+		FS: &batchv1alpha1.FSStorageSpec{
+			BasePath:  "/data",
+			ClaimName: "my-pvc",
+		},
+		Retry: &batchv1alpha1.FileRetrySpec{
+			MaxRetries:     5,
+			InitialBackoff: "500ms",
+			MaxBackoff:     "30s",
+		},
+	}
+
+	vals, err := specToHelmValues(gw, testSecretName(gw))
+	if err != nil {
+		t.Fatalf("specToHelmValues() error: %v", err)
+	}
+
+	global := vals["global"].(map[string]interface{})
+	fc := global["fileClient"].(map[string]interface{})
+
+	if got := fc["type"]; got != "fs" {
+		t.Errorf("fileClient.type = %v, want fs", got)
+	}
+	fs := fc["fs"].(map[string]interface{})
+	if got := fs["basePath"]; got != "/data" {
+		t.Errorf("fs.basePath = %v, want /data", got)
+	}
+	if got := fs["pvcName"]; got != "my-pvc" {
+		t.Errorf("fs.pvcName = %v, want my-pvc", got)
+	}
+
+	retry := fc["retry"].(map[string]interface{})
+	if got := retry["maxRetries"]; got != int64(5) {
+		t.Errorf("retry.maxRetries = %v, want 5", got)
+	}
+	if got := retry["initialBackoff"]; got != "500ms" {
+		t.Errorf("retry.initialBackoff = %v, want 500ms", got)
+	}
+}
+
+func TestSpecToHelmValues_OTEL(t *testing.T) {
+	gw := minimalGateway()
+	gw.Spec.OTEL = &batchv1alpha1.OTELSpec{
+		Endpoint:          "http://otel-collector:4317",
+		Insecure:          true,
+		Sampler:           "parentbased_traceidratio",
+		SamplerArg:        "0.1",
+		RedisTracing:      true,
+		PostgresqlTracing: true,
+	}
+
+	vals, err := specToHelmValues(gw, testSecretName(gw))
+	if err != nil {
+		t.Fatalf("specToHelmValues() error: %v", err)
+	}
+
+	global := vals["global"].(map[string]interface{})
+	otel := global["otel"].(map[string]interface{})
+
+	if got := otel["endpoint"]; got != "http://otel-collector:4317" {
+		t.Errorf("otel.endpoint = %v", got)
+	}
+	if got := otel["insecure"]; got != true {
+		t.Errorf("otel.insecure = %v, want true", got)
+	}
+	if got := otel["sampler"]; got != "parentbased_traceidratio" {
+		t.Errorf("otel.sampler = %v", got)
+	}
+	if got := otel["redisTracing"]; got != true {
+		t.Errorf("otel.redisTracing = %v, want true", got)
+	}
+}
+
+func TestSpecToHelmValues_TLSSecretName(t *testing.T) {
+	gw := minimalGateway()
+	gw.Spec.TLS = &batchv1alpha1.TLSSpec{
+		Enabled:    true,
+		SecretName: "my-tls-secret",
+	}
+
+	vals, err := specToHelmValues(gw, testSecretName(gw))
+	if err != nil {
+		t.Fatalf("specToHelmValues() error: %v", err)
+	}
+
+	apiserver := vals["apiserver"].(map[string]interface{})
+	tls := apiserver["tls"].(map[string]interface{})
+
+	if got := tls["secretName"]; got != "my-tls-secret" {
+		t.Errorf("tls.secretName = %v, want my-tls-secret", got)
+	}
+}
+
+func TestSpecToHelmValues_TLSDNSNames(t *testing.T) {
+	gw := minimalGateway()
+	gw.Spec.TLS = &batchv1alpha1.TLSSpec{
+		Enabled: true,
+		CertManager: &batchv1alpha1.CertManagerSpec{
+			IssuerName: "letsencrypt",
+			DNSNames:   []string{"api.example.com", "api2.example.com"},
+		},
+	}
+
+	vals, err := specToHelmValues(gw, testSecretName(gw))
+	if err != nil {
+		t.Fatalf("specToHelmValues() error: %v", err)
+	}
+
+	apiserver := vals["apiserver"].(map[string]interface{})
+	tls := apiserver["tls"].(map[string]interface{})
+	cm := tls["certManager"].(map[string]interface{})
+
+	dnsNames, ok := cm["dnsNames"].([]interface{})
+	if !ok {
+		t.Fatalf("dnsNames not a []interface{}: %T", cm["dnsNames"])
+	}
+	if len(dnsNames) != 2 {
+		t.Fatalf("dnsNames length = %d, want 2", len(dnsNames))
+	}
+	if got := dnsNames[0]; got != "api.example.com" {
+		t.Errorf("dnsNames[0] = %v, want api.example.com", got)
+	}
+}
+
+func TestSpecToHelmValues_HTTPRouteAnnotations(t *testing.T) {
+	gw := minimalGateway()
+	gw.Spec.HTTPRoute = &batchv1alpha1.HTTPRouteSpec{
+		Enabled: true,
+		Annotations: map[string]string{
+			"custom.io/ann": "value",
+		},
+	}
+
+	vals, err := specToHelmValues(gw, testSecretName(gw))
+	if err != nil {
+		t.Fatalf("specToHelmValues() error: %v", err)
+	}
+
+	apiserver := vals["apiserver"].(map[string]interface{})
+	hr := apiserver["httpRoute"].(map[string]interface{})
+	anns, ok := hr["annotations"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("annotations not a map: %T", hr["annotations"])
+	}
+	if got := anns["custom.io/ann"]; got != "value" {
+		t.Errorf("annotations[custom.io/ann] = %v, want value", got)
+	}
+}
+
+func TestSpecToHelmValues_ModelGateways(t *testing.T) {
+	gw := minimalGateway()
+	gw.Spec.Processor.GlobalInferenceGateway = nil
+	gw.Spec.Processor.ModelGateways = map[string]batchv1alpha1.InferenceGatewaySpec{
+		"model-a": {URL: "http://model-a:8000", RequestTimeout: "2m"},
+	}
+
+	vals, err := specToHelmValues(gw, testSecretName(gw))
+	if err != nil {
+		t.Fatalf("specToHelmValues() error: %v", err)
+	}
+
+	processor := vals["processor"].(map[string]interface{})
+	config := processor["config"].(map[string]interface{})
+	mg := config["modelGateways"].(map[string]interface{})
+	ma := mg["model-a"].(map[string]interface{})
+	if got := ma["url"]; got != "http://model-a:8000" {
+		t.Errorf("modelGateways.model-a.url = %v", got)
+	}
+	if got := ma["requestTimeout"]; got != "2m" {
+		t.Errorf("modelGateways.model-a.requestTimeout = %v", got)
+	}
+}
+
+func TestSpecToHelmValues_PrometheusRule(t *testing.T) {
+	gw := minimalGateway()
+	gw.Spec.PrometheusRule = &batchv1alpha1.PrometheusRuleSpec{
+		Enabled: true,
+		Labels:  map[string]string{"prometheus": "kube-prometheus"},
+	}
+
+	vals, err := specToHelmValues(gw, testSecretName(gw))
+	if err != nil {
+		t.Fatalf("specToHelmValues() error: %v", err)
+	}
+
+	pr := vals["prometheusRule"].(map[string]interface{})
+	if got := pr["enabled"]; got != true {
+		t.Errorf("prometheusRule.enabled = %v, want true", got)
+	}
+	labels := pr["labels"].(map[string]interface{})
+	if got := labels["prometheus"]; got != "kube-prometheus" {
+		t.Errorf("labels.prometheus = %v, want kube-prometheus", got)
+	}
+}
+
+func TestSpecToHelmValues_APIServerConfig(t *testing.T) {
+	gw := minimalGateway()
+	gw.Spec.APIServer.Config = &batchv1alpha1.APIServerConfigSpec{
+		Port:               8080,
+		ObservabilityPort:  9090,
+		ReadTimeoutSeconds: 30,
+		WriteTimeoutSeconds: 60,
+		IdleTimeoutSeconds: 120,
+		EnablePprof:        true,
+		BatchAPI: &batchv1alpha1.BatchAPIConfig{
+			EventTTLSeconds:    3600,
+			PassThroughHeaders: []string{"X-Request-ID", "Authorization"},
+		},
+		FileAPI: &batchv1alpha1.FileAPIConfig{
+			DefaultExpirationSeconds: 86400,
+			MaxSizeBytes:             104857600,
+			MaxLineCount:             100000,
+		},
+	}
+
+	vals, err := specToHelmValues(gw, testSecretName(gw))
+	if err != nil {
+		t.Fatalf("specToHelmValues() error: %v", err)
+	}
+
+	apiserver := vals["apiserver"].(map[string]interface{})
+	config := apiserver["config"].(map[string]interface{})
+
+	if got := config["port"]; got != int64(8080) {
+		t.Errorf("port = %v, want 8080", got)
+	}
+	if got := config["observabilityPort"]; got != int64(9090) {
+		t.Errorf("observabilityPort = %v, want 9090", got)
+	}
+	if got := config["readTimeoutSeconds"]; got != int64(30) {
+		t.Errorf("readTimeoutSeconds = %v, want 30", got)
+	}
+	if got := config["writeTimeoutSeconds"]; got != int64(60) {
+		t.Errorf("writeTimeoutSeconds = %v, want 60", got)
+	}
+	if got := config["idleTimeoutSeconds"]; got != int64(120) {
+		t.Errorf("idleTimeoutSeconds = %v, want 120", got)
+	}
+	if got := config["enablePprof"]; got != true {
+		t.Errorf("enablePprof = %v, want true", got)
+	}
+
+	batchAPI := config["batchAPI"].(map[string]interface{})
+	if got := batchAPI["eventTTLSeconds"]; got != int64(3600) {
+		t.Errorf("batchAPI.eventTTLSeconds = %v, want 3600", got)
+	}
+	headers := batchAPI["passThroughHeaders"].([]interface{})
+	if len(headers) != 2 || headers[0] != "X-Request-ID" {
+		t.Errorf("passThroughHeaders = %v", headers)
+	}
+
+	fileAPI := config["fileAPI"].(map[string]interface{})
+	if got := fileAPI["defaultExpirationSeconds"]; got != int64(86400) {
+		t.Errorf("fileAPI.defaultExpirationSeconds = %v, want 86400", got)
+	}
+	if got := fileAPI["maxSizeBytes"]; got != int64(104857600) {
+		t.Errorf("fileAPI.maxSizeBytes = %v, want 104857600", got)
+	}
+	if got := fileAPI["maxLineCount"]; got != int64(100000) {
+		t.Errorf("fileAPI.maxLineCount = %v, want 100000", got)
+	}
+}
+
+func TestSpecToHelmValues_ProcessorConfig(t *testing.T) {
+	gw := minimalGateway()
+	gw.Spec.Processor.Config = &batchv1alpha1.ProcessorConfigSpec{
+		NumWorkers:                     8,
+		GlobalConcurrency:              32,
+		PerModelMaxConcurrency:         16,
+		RecoveryMaxConcurrency:         4,
+		InferenceObjective:             "throughput",
+		DefaultOutputExpirationSeconds: 7200,
+		ProgressTTLSeconds:             3600,
+		EnablePprof:                    true,
+	}
+
+	vals, err := specToHelmValues(gw, testSecretName(gw))
+	if err != nil {
+		t.Fatalf("specToHelmValues() error: %v", err)
+	}
+
+	processor := vals["processor"].(map[string]interface{})
+	config := processor["config"].(map[string]interface{})
+
+	if got := config["numWorkers"]; got != int64(8) {
+		t.Errorf("numWorkers = %v, want 8", got)
+	}
+	if got := config["globalConcurrency"]; got != int64(32) {
+		t.Errorf("globalConcurrency = %v, want 32", got)
+	}
+	if got := config["perModelMaxConcurrency"]; got != int64(16) {
+		t.Errorf("perModelMaxConcurrency = %v, want 16", got)
+	}
+	if got := config["recoveryMaxConcurrency"]; got != int64(4) {
+		t.Errorf("recoveryMaxConcurrency = %v, want 4", got)
+	}
+	if got := config["inferenceObjective"]; got != "throughput" {
+		t.Errorf("inferenceObjective = %v, want throughput", got)
+	}
+	if got := config["defaultOutputExpirationSeconds"]; got != int64(7200) {
+		t.Errorf("defaultOutputExpirationSeconds = %v, want 7200", got)
+	}
+	if got := config["progressTTLSeconds"]; got != int64(3600) {
+		t.Errorf("progressTTLSeconds = %v, want 3600", got)
+	}
+	if got := config["enablePprof"]; got != true {
+		t.Errorf("enablePprof = %v, want true", got)
+	}
+}
+
+func TestSpecToHelmValues_GCConfig(t *testing.T) {
+	gw := minimalGateway()
+	gw.Spec.GC.Config = &batchv1alpha1.GCConfigSpec{
+		DryRun:         true,
+		MaxConcurrency: 10,
+	}
+
+	vals, err := specToHelmValues(gw, testSecretName(gw))
+	if err != nil {
+		t.Fatalf("specToHelmValues() error: %v", err)
+	}
+
+	gc := vals["gc"].(map[string]interface{})
+	config := gc["config"].(map[string]interface{})
+
+	if got := config["dryRun"]; got != true {
+		t.Errorf("dryRun = %v, want true", got)
+	}
+	if got := config["maxConcurrency"]; got != int64(10) {
+		t.Errorf("maxConcurrency = %v, want 10", got)
+	}
+}
+
+func TestSpecToHelmValues_InferenceGatewayMaxRetries(t *testing.T) {
+	maxRetries := int32(3)
+	gw := minimalGateway()
+	gw.Spec.Processor.GlobalInferenceGateway = &batchv1alpha1.InferenceGatewaySpec{
+		URL:        "http://gw:8000",
+		MaxRetries: &maxRetries,
+	}
+
+	vals, err := specToHelmValues(gw, testSecretName(gw))
+	if err != nil {
+		t.Fatalf("specToHelmValues() error: %v", err)
+	}
+
+	processor := vals["processor"].(map[string]interface{})
+	config := processor["config"].(map[string]interface{})
+	gig := config["globalInferenceGateway"].(map[string]interface{})
+	if got := gig["maxRetries"]; got != int64(3) {
+		t.Errorf("maxRetries = %v, want 3", got)
+	}
+}
+
+func TestSpecToHelmValues_ResourceRequirements(t *testing.T) {
+	gw := minimalGateway()
+	gw.Spec.APIServer.Resources = &corev1.ResourceRequirements{
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("2"),
+			corev1.ResourceMemory: resource.MustParse("1Gi"),
+		},
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("500m"),
+			corev1.ResourceMemory: resource.MustParse("256Mi"),
+		},
+	}
+
+	vals, err := specToHelmValues(gw, testSecretName(gw))
+	if err != nil {
+		t.Fatalf("specToHelmValues() error: %v", err)
+	}
+
+	apiserver := vals["apiserver"].(map[string]interface{})
+	res := apiserver["resources"].(map[string]interface{})
+
+	limits := res["limits"].(map[string]interface{})
+	if got := limits["cpu"]; got != "2" {
+		t.Errorf("limits.cpu = %q, want %q", got, "2")
+	}
+	if got := limits["memory"]; got != "1Gi" {
+		t.Errorf("limits.memory = %q, want %q", got, "1Gi")
+	}
+
+	requests := res["requests"].(map[string]interface{})
+	if got := requests["cpu"]; got != "500m" {
+		t.Errorf("requests.cpu = %q, want %q", got, "500m")
+	}
+	if got := requests["memory"]; got != "256Mi" {
+		t.Errorf("requests.memory = %q, want %q", got, "256Mi")
+	}
+}
+
 func minimalGateway() *batchv1alpha1.LLMBatchGateway {
 	replicas := int32(1)
 	return &batchv1alpha1.LLMBatchGateway{
@@ -457,7 +857,7 @@ func minimalGateway() *batchv1alpha1.LLMBatchGateway {
 			Namespace: "default",
 		},
 		Spec: batchv1alpha1.LLMBatchGatewaySpec{
-			SecretRef: batchv1alpha1.SecretReference{
+			SecretRef: corev1.SecretReference{
 				Name: "batch-gateway-secrets",
 			},
 			DBBackend: "postgresql",

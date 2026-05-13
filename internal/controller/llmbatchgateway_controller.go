@@ -13,11 +13,15 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	batchv1alpha1 "github.com/opendatahub-io/llm-d-batch-gateway-operator/api/v1alpha1"
 )
@@ -56,7 +60,8 @@ type resourceKey struct {
 // +kubebuilder:rbac:groups=batch.llm-d.ai,resources=llmbatchgateways/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services;configmaps;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;patch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=referencegrants,verbs=get;list;watch
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors;podmonitors;prometheusrules,verbs=get;list;watch;create;update;patch;delete
@@ -66,6 +71,16 @@ type LLMBatchGatewayReconciler struct {
 	client.Client
 	Scheme       *runtime.Scheme
 	HelmRenderer *HelmRenderer
+	secretFilter *secretWatchFilter
+}
+
+func NewLLMBatchGatewayReconciler(c client.Client, scheme *runtime.Scheme, helm *HelmRenderer) *LLMBatchGatewayReconciler {
+	return &LLMBatchGatewayReconciler{
+		Client:       c,
+		Scheme:       scheme,
+		HelmRenderer: helm,
+		secretFilter: &secretWatchFilter{watched: make(map[string]struct{})},
+	}
 }
 
 func (r *LLMBatchGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -95,7 +110,45 @@ func (r *LLMBatchGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, nil
 	}
 
-	objects, err := r.HelmRenderer.RenderChart(&gw)
+	// Resolve the credentials Secret, copying it into gw.Namespace when it
+	// lives in a different namespace (requires a permitting ReferenceGrant).
+	localSecretName, err := r.resolveSecret(ctx, &gw)
+	if err != nil {
+		var refErr *ReferenceNotPermittedError
+		var immutableErr *SecretRefImmutableError
+		reason, permanent := "", false
+		if errors.As(err, &refErr) {
+			reason, permanent = "ReferenceNotPermitted", true
+		} else if errors.As(err, &immutableErr) {
+			reason, permanent = "SecretRefImmutable", true
+		}
+		if permanent {
+			meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+				Type:               ConditionReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             reason,
+				Message:            err.Error(),
+				ObservedGeneration: gw.Generation,
+			})
+			if statusErr := r.Status().Update(ctx, &gw); statusErr != nil {
+				return ctrl.Result{}, fmt.Errorf("updating status after %s: %w", reason, statusErr)
+			}
+			// Permanent error — no requeue. The user must act (create a
+			// ReferenceGrant, or delete+recreate the CR for SecretRefImmutable).
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, fmt.Errorf("resolving secret: %w", err)
+	}
+
+	// Track the source secret in the filter so the cluster-wide Secret watch
+	// only triggers reconciles for secrets this controller actually cares about.
+	// Only cross-namespace refs are tracked; same-namespace refs are not watched.
+	ref := gw.Spec.SecretRef
+	if ref.Namespace != "" && ref.Namespace != gw.Namespace {
+		r.secretFilter.add(ref.Namespace, ref.Name)
+	}
+
+	objects, err := r.HelmRenderer.RenderChart(&gw, localSecretName)
 	if err != nil {
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 			Type:               ConditionReady,
@@ -280,12 +333,66 @@ func (r *LLMBatchGatewayReconciler) updateStatus(ctx context.Context, gw *batchv
 }
 
 func (r *LLMBatchGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// enqueueForSecret maps a Secret event to the LLMBatchGateway CRs whose
+	// cross-namespace secretRef points at it. The secretWatchFilter predicate
+	// ensures this map func is only called for secrets we actually track, so the
+	// list is already narrow by the time we get here.
+	enqueueForSecret := handler.EnqueueRequestsFromMapFunc(
+		func(ctx context.Context, obj client.Object) []reconcile.Request {
+			var gwList batchv1alpha1.LLMBatchGatewayList
+			if err := r.List(ctx, &gwList); err != nil {
+				return nil
+			}
+			var reqs []reconcile.Request
+			for _, gw := range gwList.Items {
+				ref := gw.Spec.SecretRef
+
+				if ref.Namespace == obj.GetNamespace() && ref.Name == obj.GetName() {
+					reqs = append(reqs, reconcile.Request{
+						NamespacedName: types.NamespacedName{
+							Name:      gw.Name,
+							Namespace: gw.Namespace,
+						},
+					})
+				}
+			}
+			return reqs
+		},
+	)
+
+	// enqueueForReferenceGrant maps a ReferenceGrant change to all
+	// LLMBatchGateway CRs whose secretRef.namespace matches the grant's namespace.
+	enqueueForReferenceGrant := handler.EnqueueRequestsFromMapFunc(
+		func(ctx context.Context, obj client.Object) []reconcile.Request {
+			var gwList batchv1alpha1.LLMBatchGatewayList
+			if err := r.List(ctx, &gwList); err != nil {
+				return nil
+			}
+			var reqs []reconcile.Request
+			for _, gw := range gwList.Items {
+				refNS := gw.Spec.SecretRef.Namespace
+
+				if refNS == obj.GetNamespace() {
+					reqs = append(reqs, reconcile.Request{
+						NamespacedName: types.NamespacedName{
+							Name:      gw.Name,
+							Namespace: gw.Namespace,
+						},
+					})
+				}
+			}
+			return reqs
+		},
+	)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&batchv1alpha1.LLMBatchGateway{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.ServiceAccount{}).
+		Watches(&corev1.Secret{}, enqueueForSecret, builder.WithPredicates(r.secretFilter)).
+		Watches(&gatewayv1beta1.ReferenceGrant{}, enqueueForReferenceGrant).
 		Complete(r)
 }
 
