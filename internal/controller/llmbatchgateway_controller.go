@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -73,15 +74,17 @@ type LLMBatchGatewayReconciler struct {
 	Scheme       *runtime.Scheme
 	HelmRenderer *HelmRenderer
 	Recorder     record.EventRecorder
+	SyncPeriod   time.Duration
 	secretFilter *secretWatchFilter
 }
 
-func NewLLMBatchGatewayReconciler(c client.Client, scheme *runtime.Scheme, helm *HelmRenderer, recorder record.EventRecorder) *LLMBatchGatewayReconciler {
+func NewLLMBatchGatewayReconciler(c client.Client, scheme *runtime.Scheme, helm *HelmRenderer, recorder record.EventRecorder, syncPeriod time.Duration) *LLMBatchGatewayReconciler {
 	return &LLMBatchGatewayReconciler{
 		Client:       c,
 		Scheme:       scheme,
 		HelmRenderer: helm,
 		Recorder:     recorder,
+		SyncPeriod:   syncPeriod,
 		secretFilter: &secretWatchFilter{watched: make(map[string]struct{})},
 	}
 }
@@ -195,7 +198,7 @@ func (r *LLMBatchGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: r.SyncPeriod}, nil
 }
 
 func (r *LLMBatchGatewayReconciler) deleteOrphanedResources(

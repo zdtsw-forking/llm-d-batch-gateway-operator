@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"os"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -22,7 +23,10 @@ import (
 // It defaults to "dev" when built without the flag (e.g. go run).
 var version = "dev"
 
-var scheme = runtime.NewScheme()
+var (
+	scheme            = runtime.NewScheme()
+	syncPeriodDefault = 5 * time.Minute
+)
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -36,11 +40,13 @@ func main() {
 	var metricsAddr string
 	var probeAddr string
 	var enableLeaderElection bool
+	var syncPeriod time.Duration
 
 	flag.StringVar(&chartPath, "chart-path", "/charts/batch-gateway", "Path to the batch-gateway Helm chart directory")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "Address the metrics endpoint binds to")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "Address the health probe endpoint binds to")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false, "Enable leader election for controller manager")
+	flag.DurationVar(&syncPeriod, "sync-period", syncPeriodDefault, "How often to re-sync all LLMBatchGateway resources to catch out-of-band drift")
 
 	klog.InitFlags(nil)
 	flag.Parse()
@@ -68,7 +74,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := controller.NewLLMBatchGatewayReconciler(mgr.GetClient(), mgr.GetScheme(), helmRenderer, mgr.GetEventRecorderFor("llmbatchgateway-controller")).SetupWithManager(mgr); err != nil {
+	if err := controller.NewLLMBatchGatewayReconciler(mgr.GetClient(), mgr.GetScheme(), helmRenderer, mgr.GetEventRecorderFor("llmbatchgateway-controller"), syncPeriod).SetupWithManager(mgr); err != nil {
 		logger.Error(err, "unable to create controller", "controller", "LLMBatchGateway")
 		os.Exit(1)
 	}

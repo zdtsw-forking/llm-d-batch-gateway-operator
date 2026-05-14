@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -62,7 +63,25 @@ func TestReconcile(t *testing.T) {
 	}
 
 	fakeRecorder := record.NewFakeRecorder(100)
-	reconciler := NewLLMBatchGatewayReconciler(k8sClient, k8sClient.Scheme(), helmRenderer, fakeRecorder)
+	reconciler := NewLLMBatchGatewayReconciler(k8sClient, k8sClient.Scheme(), helmRenderer, fakeRecorder, 5*time.Minute)
+
+	t.Run("returns RequeueAfter on successful reconcile", func(t *testing.T) {
+		gw := newTestGateway("test-requeue")
+		if err := k8sClient.Create(ctx, gw); err != nil {
+			t.Fatalf("creating CR: %v", err)
+		}
+		t.Cleanup(func() { _ = k8sClient.Delete(ctx, gw) })
+
+		result, err := reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace},
+		})
+		if err != nil {
+			t.Fatalf("Reconcile() error: %v", err)
+		}
+		if result.RequeueAfter != 5*time.Minute {
+			t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, 5*time.Minute)
+		}
+	})
 
 	t.Run("creates all child resources", func(t *testing.T) {
 		gw := newTestGateway("test-create")
