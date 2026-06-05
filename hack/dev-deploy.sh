@@ -9,7 +9,7 @@ OPERATOR_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-batch-gateway-dev}"
 NAMESPACE="${NAMESPACE:-default}"
 # Operator namespace, must match config/default/kustomization.yaml's `namespace:` field.
-OPERATOR_NAMESPACE="${OPERATOR_NAMESPACE:-batch-gateway-operator-system}"
+OPERATOR_NAMESPACE="${OPERATOR_NAMESPACE:-llm-d-batch-gateway-operator-system}"
 OPERATOR_IMG="${OPERATOR_IMG:-localhost/batch-gateway-operator:dev}"
 
 POSTGRESQL_PASSWORD="${POSTGRESQL_PASSWORD:-postgres}"
@@ -45,9 +45,9 @@ die()  { echo "  [FATAL] $*" >&2; exit 1; }
 
 # ── Prerequisites ────────────────────────────────────────────────────────────
 
-CONTAINER_TOOL=""
+IMAGE_BUILDER=""
 
-detect_container_tool() {
+detect_IMAGE_BUILDER() {
     if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
         echo "docker"
     elif command -v podman &>/dev/null; then
@@ -66,11 +66,11 @@ check_prerequisites() {
     if [ ${#missing[@]} -gt 0 ]; then
         die "Missing required tools: ${missing[*]}"
     fi
-    CONTAINER_TOOL="$(detect_container_tool)"
-    if [ "${CONTAINER_TOOL}" = "podman" ]; then
+    IMAGE_BUILDER="$(detect_IMAGE_BUILDER)"
+    if [ "${IMAGE_BUILDER}" = "podman" ]; then
         export KIND_EXPERIMENTAL_PROVIDER=podman
     fi
-    log "Container tool: ${CONTAINER_TOOL}"
+    log "Container tool: ${IMAGE_BUILDER}"
 }
 
 # ── Kind Cluster ─────────────────────────────────────────────────────────────
@@ -118,16 +118,11 @@ install_gateway_api_crds() {
 
     local version="${GATEWAY_API_VERSION:-}"
     if [ -z "${version}" ]; then
-        local curl_args=(-fsSL)
-        if [ -n "${GITHUB_TOKEN:-}" ]; then
-            curl_args+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
-        fi
-        version=$(curl "${curl_args[@]}" https://api.github.com/repos/kubernetes-sigs/gateway-api/releases/latest \
-            | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
+        version=$(cd "${OPERATOR_DIR}" && go list -m -f '{{.Version}}' sigs.k8s.io/gateway-api)
     fi
 
     if [ -z "${version}" ]; then
-        die "Could not determine Gateway API release version (set GATEWAY_API_VERSION to override)."
+        die "Could not determine Gateway API version from go.mod (set GATEWAY_API_VERSION to override)."
     fi
 
     log "Gateway API version: ${version}"
@@ -142,16 +137,11 @@ install_prometheus_operator_crds() {
 
     local version="${PROMETHEUS_OPERATOR_VERSION:-}"
     if [ -z "${version}" ]; then
-        local curl_args=(-fsSL)
-        if [ -n "${GITHUB_TOKEN:-}" ]; then
-            curl_args+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
-        fi
-        version=$(curl "${curl_args[@]}" https://api.github.com/repos/prometheus-operator/prometheus-operator/releases/latest \
-            | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
+        version=$(cd "${OPERATOR_DIR}" && go list -m -f '{{.Version}}' github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring)
     fi
 
     if [ -z "${version}" ]; then
-        die "Could not determine Prometheus Operator version (set PROMETHEUS_OPERATOR_VERSION to override)."
+        die "Could not determine Prometheus Operator version from go.mod (set PROMETHEUS_OPERATOR_VERSION to override)."
     fi
 
     log "Prometheus Operator version: ${version}"
@@ -225,16 +215,16 @@ build_operator() {
     step "Building operator image '${OPERATOR_IMG}'..."
     cd "${OPERATOR_DIR}"
     local build_args=(-t "${OPERATOR_IMG}" -f Dockerfile)
-    if [ "${CONTAINER_TOOL}" = "podman" ]; then
+    if [ "${IMAGE_BUILDER}" = "podman" ]; then
         build_args+=(--ignorefile Dockerfile.dockerignore)
     fi
-    ${CONTAINER_TOOL} build "${build_args[@]}" .
+    ${IMAGE_BUILDER} build "${build_args[@]}" .
     log "Operator image built."
 }
 
 load_operator() {
     step "Loading operator image into Kind..."
-    if [ "${CONTAINER_TOOL}" = "podman" ]; then
+    if [ "${IMAGE_BUILDER}" = "podman" ]; then
         podman save "${OPERATOR_IMG}" | kind load image-archive /dev/stdin --name "${KIND_CLUSTER_NAME}"
     else
         kind load docker-image "${OPERATOR_IMG}" --name "${KIND_CLUSTER_NAME}"
@@ -252,12 +242,12 @@ deploy_operator() {
 
     # override the env vars on the deployment to pin the images dev wants (defaults read from params.env.
     step "Setting 3 component images on the operator deployment as env variable..."
-    kubectl set env deployment/batch-gateway-operator -n "${OPERATOR_NAMESPACE}" \
+    kubectl set env deployment/llm-d-batch-gateway-operator -n "${OPERATOR_NAMESPACE}" \
         LLM_D_BATCH_GATEWAY_APISERVER_IMAGE="${APISERVER_IMG}" \
         LLM_D_BATCH_GATEWAY_PROCESSOR_IMAGE="${PROCESSOR_IMG}" \
         LLM_D_BATCH_GATEWAY_GC_IMAGE="${GC_IMG}"
 
-    kubectl rollout status deployment/batch-gateway-operator \
+    kubectl rollout status deployment/llm-d-batch-gateway-operator \
         -n "${OPERATOR_NAMESPACE}" --timeout=120s
 
     log "Operator deployed."
@@ -286,7 +276,7 @@ spec:
   type: NodePort
   selector:
     app.kubernetes.io/name: batch-gateway-apiserver
-    app.kubernetes.io/instance: batch-gateway
+    app.kubernetes.io/instance: batch-gateway-dev
     app.kubernetes.io/component: apiserver
   ports:
   - name: http
@@ -308,7 +298,7 @@ spec:
   type: NodePort
   selector:
     app.kubernetes.io/name: batch-gateway-processor
-    app.kubernetes.io/instance: batch-gateway
+    app.kubernetes.io/instance: batch-gateway-dev
     app.kubernetes.io/component: processor
   ports:
   - name: metrics
@@ -331,7 +321,7 @@ wait_for_batch_gateway() {
     while [ $elapsed -lt $timeout ]; do
         local ready
         ready=$(kubectl get deployments -n "${NAMESPACE}" \
-            -l "app.kubernetes.io/instance=batch-gateway" \
+            -l "app.kubernetes.io/instance=batch-gateway-dev" \
             -o jsonpath='{range .items[*]}{.status.readyReplicas}{"\n"}{end}' 2>/dev/null | grep -c "^[1-9]" || true)
 
         if [ "$ready" -ge 3 ]; then
