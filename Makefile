@@ -1,18 +1,20 @@
 VERSION ?= $(shell cat VERSION)
-IMG ?= ghcr.io/opendatahub-io/batch-gateway-operator:latest
+IMG ?= quay.io/opendatahub/odh-batch-gateway-operator:latest
 CONTROLLER_GEN ?= go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.17.3
 ENVTEST ?= go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.21
 ENVTEST_K8S_VERSION ?= 1.33.0
 LOCALBIN ?= $(shell pwd)/bin/k8s
 
+KUSTOMIZE_VERSION ?= v5.8.1
+KUSTOMIZE ?= $(shell pwd)/bin/kustomize
 
+KIND_CLUSTER_NAME ?= batch-gateway-dev
 
 ## The full batch-gateway repo is checked out in $(BATCH_GATEWAY_DIR); the operator uses its chart + e2e tests.
 ## This replaces the old git submodule solution.
 BATCH_GATEWAY_REPO ?= https://github.com/opendatahub-io/batch-gateway.git
 BATCH_GATEWAY_REF  ?= a672735cf19325d646a6ef33270df903cfdcd7cb
 BATCH_GATEWAY_DIR  ?= batch-gateway
-
 
 ## Deps
 
@@ -46,7 +48,7 @@ lint:
 
 .PHONY: manifests
 manifests:
-	$(CONTROLLER_GEN) rbac:roleName=batch-gateway-operator crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN) rbac:roleName=llm-d-batch-gateway-operator crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 
 .PHONY: generate
 generate:
@@ -57,8 +59,7 @@ generate:
 .PHONY: test
 test: generate manifests setup-envtest fetch-batch-gateway
 	KUBEBUILDER_ASSETS="$$($(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
-	CGO_ENABLED=1 \
-	go test -v ./... -race -count=1
+	go test -v ./... -count=1
 
 .PHONY: setup-envtest
 setup-envtest:
@@ -66,19 +67,19 @@ setup-envtest:
 
 ## Container
 
-CONTAINER_TOOL ?= $(shell command -v docker 2>/dev/null || command -v podman 2>/dev/null)
+IMAGE_BUILDER ?= $(shell command -v docker 2>/dev/null || command -v podman 2>/dev/null)
 
 .PHONY: docker-build
 docker-build: fetch-batch-gateway
-	$(CONTAINER_TOOL) build -t $(IMG) -f Dockerfile .
+	$(IMAGE_BUILDER) build -t $(IMG) -f Dockerfile .
 
 .PHONY: docker-build-konflux
 docker-build-konflux: ## Build with Dockerfile.konflux
-	$(CONTAINER_TOOL) build -t $(IMG) -f Dockerfile.konflux .
+	$(IMAGE_BUILDER) build -t $(IMG) -f Dockerfile.konflux .
 
 .PHONY: docker-push
 docker-push:
-	$(CONTAINER_TOOL) push $(IMG)
+	$(IMAGE_BUILDER) push $(IMG)
 
 ## Install
 
@@ -92,18 +93,16 @@ uninstall:
 
 ## Kustomize
 
-KUSTOMIZE_VERSION ?= v5.8.1
-KUSTOMIZE ?= $(shell pwd)/bin/kustomize
-
 .PHONY: kustomize
 kustomize: ## Install kustomize locally
 	@test -s $(KUSTOMIZE) || \
 		GOBIN=$(shell pwd)/bin go install sigs.k8s.io/kustomize/kustomize/v5@$(KUSTOMIZE_VERSION)
 
 .PHONY: verify-manifests
-verify-manifests: kustomize ## Verify that all manifest builds succeed
-	@echo "Running manifest verification script..."
-	@bash test/scripts/verify-manifests.sh
+verify-manifests: manifests kustomize ## Verify that every overlay builds successfully
+	@return=0; for dir in config/overlays/*/; do \
+		$(KUSTOMIZE) build "$$dir" >/dev/null && echo "✓ $$dir" || { echo "✗ $$dir" >&2; return=1; }; \
+	done; exit $$return
 
 ## Deploy (kustomize)
 
@@ -117,8 +116,6 @@ undeploy:
 	kubectl delete -k config/default --ignore-not-found
 
 ## Dev (Kind)
-
-KIND_CLUSTER_NAME ?= batch-gateway-dev
 
 .PHONY: dev-deploy
 dev-deploy: fetch-batch-gateway
@@ -140,8 +137,8 @@ test-e2e-batch-gateway: fetch-batch-gateway
 	cd $(BATCH_GATEWAY_DIR)/test/e2e && go test -v -count=1 -run "$(TEST_RUN)" ./...
 
 .PHONY: test-e2e-operator
-test-e2e-operator:
-	cd test/e2e && go test -v -count=1 -timeout 5m ./...
+test-e2e-operator: dev-deploy
+	cd test/e2e && TEST_CR_NAME=batch-gateway-dev go test -v -count=1 -timeout 5m ./...
 
 .PHONY: fetch-batch-gateway
 fetch-batch-gateway: ## Fetch the full batch-gateway repo at BATCH_GATEWAY_REF (the operator uses its chart + e2e tests).
