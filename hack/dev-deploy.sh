@@ -8,6 +8,8 @@ OPERATOR_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-batch-gateway-dev}"
 NAMESPACE="${NAMESPACE:-default}"
+# Operator namespace, must match config/default/kustomization.yaml's `namespace:` field.
+OPERATOR_NAMESPACE="${OPERATOR_NAMESPACE:-batch-gateway-operator-system}"
 OPERATOR_IMG="${OPERATOR_IMG:-localhost/batch-gateway-operator:dev}"
 
 POSTGRESQL_PASSWORD="${POSTGRESQL_PASSWORD:-postgres}"
@@ -18,9 +20,12 @@ MINIO_REGION="${MINIO_REGION:-us-east-1}"
 GATEWAY_API_VERSION="${GATEWAY_API_VERSION:-}"
 PROMETHEUS_OPERATOR_VERSION="${PROMETHEUS_OPERATOR_VERSION:-}"
 
-APISERVER_IMG="${APISERVER_IMG:-ghcr.io/llm-d-incubation/batch-gateway-apiserver:latest}"
-PROCESSOR_IMG="${PROCESSOR_IMG:-ghcr.io/llm-d-incubation/batch-gateway-processor:latest}"
-GC_IMG="${GC_IMG:-ghcr.io/llm-d-incubation/batch-gateway-gc:latest}"
+# read from params.env if you wanna test a different image, go update params.env
+PARAMS_ENV="${OPERATOR_DIR}/config/base/params.env"
+param_image() { grep -E "^$1=" "${PARAMS_ENV}" 2>/dev/null | head -n1 | cut -d= -f2- || true; }
+APISERVER_IMG="${APISERVER_IMG:-$(param_image LLM_D_BATCH_GATEWAY_APISERVER_IMAGE)}"
+PROCESSOR_IMG="${PROCESSOR_IMG:-$(param_image LLM_D_BATCH_GATEWAY_PROCESSOR_IMAGE)}"
+GC_IMG="${GC_IMG:-$(param_image LLM_D_BATCH_GATEWAY_GC_IMAGE)}"
 VLLM_SIM_IMG="${VLLM_SIM_IMG:-ghcr.io/llm-d/llm-d-inference-sim:latest}"
 
 # Port configuration (matches batch-gateway defaults)
@@ -100,103 +105,12 @@ EOF
 
 # ── Dependencies ─────────────────────────────────────────────────────────────
 
-install_postgresql() {
-    step "Installing PostgreSQL..."
-
-    if ! helm repo list 2>/dev/null | grep -q bitnami; then
-        helm repo add bitnami https://charts.bitnami.com/bitnami
-    fi
-    helm repo update bitnami || warn "Helm repo update failed; continuing."
-
-    if helm status postgresql -n "${NAMESPACE}" &>/dev/null; then
-        log "PostgreSQL already installed. Skipping."
-        return
-    fi
-
-    helm install postgresql bitnami/postgresql \
-        --namespace "${NAMESPACE}" \
-        --set auth.postgresPassword="${POSTGRESQL_PASSWORD}" \
-        --set primary.persistence.enabled=false \
-        --wait --timeout 120s
-
-    log "PostgreSQL installed."
-}
-
-install_redis() {
-    step "Installing Redis..."
-
-    if helm status redis -n "${NAMESPACE}" &>/dev/null; then
-        log "Redis already installed. Skipping."
-        return
-    fi
-
-    helm install redis bitnami/redis \
-        --namespace "${NAMESPACE}" \
-        --set auth.enabled=false \
-        --set replica.replicaCount=0 \
-        --set master.persistence.enabled=false \
-        --wait --timeout 120s
-
-    log "Redis installed."
-}
-
-install_minio() {
-    step "Installing MinIO..."
-
-    if kubectl get deployment minio -n "${NAMESPACE}" &>/dev/null; then
-        log "MinIO already exists. Skipping."
-        return
-    fi
-
-    kubectl apply -n "${NAMESPACE}" -f - <<EOF
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: minio
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: minio
-  template:
-    metadata:
-      labels:
-        app: minio
-    spec:
-      containers:
-      - name: minio
-        image: minio/minio:latest
-        args: ["server", "/data", "--console-address", ":9001"]
-        env:
-        - name: MINIO_ROOT_USER
-          value: "${MINIO_ACCESS_KEY}"
-        - name: MINIO_ROOT_PASSWORD
-          value: "${MINIO_SECRET_KEY}"
-        ports:
-        - containerPort: 9000
-          name: api
-        readinessProbe:
-          httpGet:
-            path: /minio/health/ready
-            port: 9000
-          initialDelaySeconds: 5
-          periodSeconds: 5
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: minio
-spec:
-  selector:
-    app: minio
-  ports:
-  - name: api
-    port: 9000
-    targetPort: 9000
-EOF
-
-    kubectl rollout status deployment minio -n "${NAMESPACE}" --timeout=120s
-    log "MinIO installed."
+install_prereqs() {
+    NAMESPACE="${NAMESPACE}" \
+    POSTGRESQL_PASSWORD="${POSTGRESQL_PASSWORD}" \
+    MINIO_ROOT_USER="${MINIO_ACCESS_KEY}" \
+    MINIO_ROOT_PASSWORD="${MINIO_SECRET_KEY}" \
+        bash "${SCRIPT_DIR}/setup-prereqs.sh"
 }
 
 install_gateway_api_crds() {
@@ -305,23 +219,6 @@ EOF
     log "vLLM simulator installed."
 }
 
-create_secret() {
-    step "Creating batch-gateway-secrets..."
-
-    local redis_url="redis://redis-master.${NAMESPACE}.svc.cluster.local:6379/0"
-    local postgresql_url="postgresql://postgres:${POSTGRESQL_PASSWORD}@postgresql.${NAMESPACE}.svc.cluster.local:5432/postgres"
-
-    kubectl create secret generic batch-gateway-secrets \
-        --namespace "${NAMESPACE}" \
-        --from-literal=redis-url="${redis_url}" \
-        --from-literal=postgresql-url="${postgresql_url}" \
-        --from-literal=inference-api-key="dummy-api-key" \
-        --from-literal=s3-secret-access-key="${MINIO_SECRET_KEY}" \
-        --dry-run=client -o yaml | kubectl apply -f -
-
-    log "Secret created."
-}
-
 # ── Operator ─────────────────────────────────────────────────────────────────
 
 build_operator() {
@@ -349,12 +246,19 @@ deploy_operator() {
     step "Installing CRD and deploying operator..."
     cd "${OPERATOR_DIR}"
 
-    kubectl create namespace batch-gateway-operator-system 2>/dev/null || true
+    kubectl create namespace "${OPERATOR_NAMESPACE}" 2>/dev/null || true
     make install
     IMG="${OPERATOR_IMG}" make deploy
 
-    kubectl rollout status deployment -l control-plane=controller-manager \
-        -n batch-gateway-operator-system --timeout=120s
+    # override the env vars on the deployment to pin the images dev wants (defaults read from params.env.
+    step "Setting 3 component images on the operator deployment as env variable..."
+    kubectl set env deployment/batch-gateway-operator -n "${OPERATOR_NAMESPACE}" \
+        LLM_D_BATCH_GATEWAY_APISERVER_IMAGE="${APISERVER_IMG}" \
+        LLM_D_BATCH_GATEWAY_PROCESSOR_IMAGE="${PROCESSOR_IMG}" \
+        LLM_D_BATCH_GATEWAY_GC_IMAGE="${GC_IMG}"
+
+    kubectl rollout status deployment/batch-gateway-operator \
+        -n "${OPERATOR_NAMESPACE}" --timeout=120s
 
     log "Operator deployed."
 }
@@ -448,8 +352,8 @@ print_status() {
     step "Deployment complete!"
 
     echo "----------------------------------------"
-    echo "  Operator (batch-gateway-operator-system):"
-    kubectl get all -n batch-gateway-operator-system
+    echo "  Operator (${OPERATOR_NAMESPACE}):"
+    kubectl get all -n "${OPERATOR_NAMESPACE}"
 
     echo "----------------------------------------"
     echo "  CR Status:"
@@ -485,11 +389,8 @@ main() {
     ensure_cluster
     install_gateway_api_crds
     install_prometheus_operator_crds
-    install_postgresql
-    install_redis
-    install_minio
+    install_prereqs
     install_vllm_sim
-    create_secret
     load_operator
     deploy_operator
     apply_cr
