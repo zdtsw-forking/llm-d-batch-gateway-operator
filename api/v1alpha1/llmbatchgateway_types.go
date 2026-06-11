@@ -185,6 +185,11 @@ type APIServerSpec struct {
 
 	// Config holds fine-grained API server configuration.
 	Config *APIServerConfigSpec `json:"config,omitempty"`
+
+	// ImagePullPolicy overrides the image pull policy for the API server container.
+	// Useful for development workflows where the image is loaded directly into the cluster node.
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 }
 
 // APIServerConfigSpec holds fine-grained configuration for the API server process.
@@ -262,6 +267,11 @@ type ProcessorSpec struct {
 	// Resources defines CPU and memory requests/limits for the processor container.
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
+	// ImagePullPolicy overrides the image pull policy for the processor container.
+	// Useful for development workflows where the image is loaded directly into the cluster node.
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+
 	// GlobalInferenceGateway is the default inference gateway used for all models
 	// unless overridden by a ModelGateways entry.
 	GlobalInferenceGateway *InferenceGatewaySpec `json:"globalInferenceGateway,omitempty"`
@@ -317,19 +327,30 @@ type InferenceGatewaySpec struct {
 	TLSClientKeyFile string `json:"tlsClientKeyFile,omitempty"`
 }
 
+// ConcurrencyConfig groups the dispatch-rate and concurrency control knobs.
+type ConcurrencyConfig struct {
+	// Global limits total in-flight inference requests across all workers.
+	// Acts as a fixed ceiling — the sum of all per-endpoint concurrency is
+	// bounded by this value.
+	// +kubebuilder:validation:Minimum=1
+	Global int32 `json:"global,omitempty"`
+
+	// PerEndpoint is the initial and maximum concurrency per inference endpoint.
+	// +kubebuilder:validation:Minimum=1
+	PerEndpoint int32 `json:"perEndpoint,omitempty"`
+
+	// Recovery limits concurrent job recoveries during startup.
+	// +kubebuilder:validation:Minimum=1
+	Recovery int32 `json:"recovery,omitempty"`
+}
+
 // ProcessorConfigSpec holds fine-grained configuration for the processor process.
 type ProcessorConfigSpec struct {
 	// NumWorkers is the number of concurrent worker goroutines processing jobs.
 	NumWorkers int32 `json:"numWorkers,omitempty"`
 
-	// GlobalConcurrency is the maximum number of in-flight inference requests across all models.
-	GlobalConcurrency int32 `json:"globalConcurrency,omitempty"`
-
-	// PerModelMaxConcurrency is the maximum number of in-flight inference requests per model.
-	PerModelMaxConcurrency int32 `json:"perModelMaxConcurrency,omitempty"`
-
-	// RecoveryMaxConcurrency is the maximum concurrency for recovering in-progress jobs after restart.
-	RecoveryMaxConcurrency int32 `json:"recoveryMaxConcurrency,omitempty"`
+	// Concurrency groups all dispatch-rate and concurrency control knobs.
+	Concurrency *ConcurrencyConfig `json:"concurrency,omitempty"`
 
 	// InferenceObjective specifies the scheduling objective (e.g. "throughput", "latency").
 	// +kubebuilder:validation:MaxLength=253
@@ -359,6 +380,11 @@ type GCSpec struct {
 
 	// Config holds fine-grained GC configuration.
 	Config *GCConfigSpec `json:"config,omitempty"`
+
+	// ImagePullPolicy overrides the image pull policy for the GC container.
+	// Useful for development workflows where the image is loaded directly into the cluster node.
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 }
 
 // GCConfigSpec holds fine-grained configuration for the garbage-collector process.
