@@ -91,23 +91,23 @@ func (h *HelmRenderer) RenderChart(gw *batchv1alpha1.LLMBatchGateway, secretName
 	return objects, nil
 }
 
-func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway, secretName string, images ComponentImages) map[string]interface{} {
-	vals := map[string]interface{}{}
+func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway, secretName string, images ComponentImages) map[string]any {
+	vals := map[string]any{}
 
 	// --- Global ---
-	global := map[string]interface{}{
+	global := map[string]any{
 		"secretName": secretName,
-		"dbClient": map[string]interface{}{
+		"dbClient": map[string]any{
 			"type": gw.Spec.DBBackend,
 		},
 	}
 
 	if gw.Spec.FileStorage != nil {
-		fc := map[string]interface{}{}
+		fc := map[string]any{}
 		if gw.Spec.FileStorage.S3 != nil {
 			fc["type"] = "s3"
 			s3 := gw.Spec.FileStorage.S3
-			s3Vals := map[string]interface{}{}
+			s3Vals := map[string]any{}
 			setIfNotEmpty(s3Vals, "region", s3.Region)
 			setIfNotEmpty(s3Vals, "endpoint", s3.Endpoint)
 			setIfNotEmpty(s3Vals, "accessKeyId", s3.AccessKeyID)
@@ -121,14 +121,14 @@ func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway, secretName string, imag
 		if gw.Spec.FileStorage.FS != nil {
 			fc["type"] = "fs"
 			fs := gw.Spec.FileStorage.FS
-			fsVals := map[string]interface{}{}
+			fsVals := map[string]any{}
 			setIfNotEmpty(fsVals, "basePath", fs.BasePath)
 			setIfNotEmpty(fsVals, "pvcName", fs.ClaimName)
 			fc["fs"] = fsVals
 		}
 		if gw.Spec.FileStorage.Retry != nil {
 			r := gw.Spec.FileStorage.Retry
-			retryVals := map[string]interface{}{}
+			retryVals := map[string]any{}
 			if r.MaxRetries != 0 {
 				retryVals["maxRetries"] = int64(r.MaxRetries)
 			}
@@ -143,7 +143,7 @@ func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway, secretName string, imag
 
 	if gw.Spec.OTEL != nil {
 		otel := gw.Spec.OTEL
-		otelVals := map[string]interface{}{}
+		otelVals := map[string]any{}
 		setIfNotEmpty(otelVals, "endpoint", otel.Endpoint)
 		otelVals["insecure"] = otel.Insecure
 		setIfNotEmpty(otelVals, "sampler", otel.Sampler)
@@ -157,13 +157,17 @@ func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway, secretName string, imag
 
 	// --- API Server ---
 	apiRepo, apiTag := splitImage(images.APIServer)
-	apiserver := map[string]interface{}{
+	apiserverImage := map[string]any{
+		"repository": apiRepo,
+		"tag":        apiTag,
+	}
+	if gw.Spec.APIServer.ImagePullPolicy != "" {
+		apiserverImage["pullPolicy"] = string(gw.Spec.APIServer.ImagePullPolicy)
+	}
+	apiserver := map[string]any{
 		"enabled": true,
-		"image": map[string]interface{}{
-			"repository": apiRepo,
-			"tag":        apiTag,
-		},
-		"serviceAccount": map[string]interface{}{
+		"image":   apiserverImage,
+		"serviceAccount": map[string]any{
 			"create": true,
 		},
 	}
@@ -175,18 +179,23 @@ func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway, secretName string, imag
 	}
 	if gw.Spec.APIServer.Config != nil {
 		apiserver["config"] = apiServerConfigToMap(gw.Spec.APIServer.Config)
+		if gw.Spec.APIServer.Config.Logging != nil && gw.Spec.APIServer.Config.Logging.Verbosity != 0 {
+			apiserver["logging"] = map[string]any{
+				"verbosity": int64(gw.Spec.APIServer.Config.Logging.Verbosity),
+			}
+		}
 	}
 
 	// TLS
 	if gw.Spec.TLS != nil && gw.Spec.TLS.Enabled {
-		tls := map[string]interface{}{
+		tls := map[string]any{
 			"enabled": true,
 		}
 		if gw.Spec.TLS.SecretName != "" {
 			tls["secretName"] = gw.Spec.TLS.SecretName
 		}
 		if gw.Spec.TLS.CertManager != nil {
-			cm := map[string]interface{}{
+			cm := map[string]any{
 				"enabled": true,
 			}
 			setIfNotEmpty(cm, "issuerName", gw.Spec.TLS.CertManager.IssuerName)
@@ -201,16 +210,16 @@ func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway, secretName string, imag
 
 	// HTTPRoute
 	if gw.Spec.HTTPRoute != nil && gw.Spec.HTTPRoute.Enabled {
-		hr := map[string]interface{}{
+		hr := map[string]any{
 			"enabled": true,
 		}
 		if len(gw.Spec.HTTPRoute.Annotations) > 0 {
 			hr["annotations"] = toStringInterfaceMap(gw.Spec.HTTPRoute.Annotations)
 		}
 		if len(gw.Spec.HTTPRoute.ParentRefs) > 0 {
-			var refs []interface{}
+			var refs []any
 			for _, ref := range gw.Spec.HTTPRoute.ParentRefs {
-				r := map[string]interface{}{
+				r := map[string]any{
 					"name": ref.Name,
 				}
 				setIfNotEmpty(r, "namespace", ref.Namespace)
@@ -224,9 +233,9 @@ func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway, secretName string, imag
 
 	// ServiceMonitor
 	if gw.Spec.Monitoring != nil && gw.Spec.Monitoring.Enabled {
-		apiserver["serviceMonitor"] = map[string]interface{}{
+		apiserver["serviceMonitor"] = map[string]any{
 			"enabled": true,
-			"labels": map[string]interface{}{
+			"labels": map[string]any{
 				odhMonitoringScrapeLabel: odhMonitoringScrapeValue,
 			},
 		}
@@ -236,13 +245,17 @@ func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway, secretName string, imag
 
 	// --- Processor ---
 	procRepo, procTag := splitImage(images.Processor)
-	processor := map[string]interface{}{
+	processorImage := map[string]any{
+		"repository": procRepo,
+		"tag":        procTag,
+	}
+	if gw.Spec.Processor.ImagePullPolicy != "" {
+		processorImage["pullPolicy"] = string(gw.Spec.Processor.ImagePullPolicy)
+	}
+	processor := map[string]any{
 		"enabled": true,
-		"image": map[string]interface{}{
-			"repository": procRepo,
-			"tag":        procTag,
-		},
-		"serviceAccount": map[string]interface{}{
+		"image":   processorImage,
+		"serviceAccount": map[string]any{
 			"create": true,
 		},
 	}
@@ -253,12 +266,12 @@ func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway, secretName string, imag
 		processor["resources"] = resourceRequirementsToMap(gw.Spec.Processor.Resources)
 	}
 
-	procConfig := map[string]interface{}{}
+	procConfig := map[string]any{}
 	if gw.Spec.Processor.GlobalInferenceGateway != nil {
 		procConfig["globalInferenceGateway"] = inferenceGatewayToMap(gw.Spec.Processor.GlobalInferenceGateway)
 	}
 	if len(gw.Spec.Processor.ModelGateways) > 0 {
-		mg := map[string]interface{}{}
+		mg := map[string]any{}
 		for model, spec := range gw.Spec.Processor.ModelGateways {
 			mg[model] = inferenceGatewayToMap(&spec)
 		}
@@ -266,6 +279,11 @@ func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway, secretName string, imag
 	}
 	if gw.Spec.Processor.Config != nil {
 		mergeProcessorConfig(procConfig, gw.Spec.Processor.Config)
+		if gw.Spec.Processor.Config.Logging != nil && gw.Spec.Processor.Config.Logging.Verbosity != 0 {
+			processor["logging"] = map[string]any{
+				"verbosity": int64(gw.Spec.Processor.Config.Logging.Verbosity),
+			}
+		}
 	}
 	if len(procConfig) > 0 {
 		processor["config"] = procConfig
@@ -273,9 +291,9 @@ func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway, secretName string, imag
 
 	// PodMonitor
 	if gw.Spec.Monitoring != nil && gw.Spec.Monitoring.Enabled {
-		processor["podMonitor"] = map[string]interface{}{
+		processor["podMonitor"] = map[string]any{
 			"enabled": true,
-			"labels": map[string]interface{}{
+			"labels": map[string]any{
 				odhMonitoringScrapeLabel: odhMonitoringScrapeValue,
 			},
 		}
@@ -285,30 +303,38 @@ func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway, secretName string, imag
 
 	// --- GC ---
 	gcRepo, gcTag := splitImage(images.GC)
-	gc := map[string]interface{}{
+	gcImage := map[string]any{
+		"repository": gcRepo,
+		"tag":        gcTag,
+	}
+	if gw.Spec.GC.ImagePullPolicy != "" {
+		gcImage["pullPolicy"] = string(gw.Spec.GC.ImagePullPolicy)
+	}
+	gc := map[string]any{
 		"enabled": true,
-		"image": map[string]interface{}{
-			"repository": gcRepo,
-			"tag":        gcTag,
-		},
-		"serviceAccount": map[string]interface{}{
+		"image":   gcImage,
+		"serviceAccount": map[string]any{
 			"create": true,
 		},
 	}
-	gcConfig := map[string]interface{}{}
-	setIfNotEmpty(gcConfig, "interval", gw.Spec.GC.Interval)
+	gcConfig := map[string]any{}
+	gcCollector := map[string]any{}
+	setIfNotEmpty(gcCollector, "interval", gw.Spec.GC.Interval)
 	if gw.Spec.GC.Config != nil {
 		if gw.Spec.GC.Config.DryRun {
 			gcConfig["dryRun"] = true
 		}
 		if gw.Spec.GC.Config.MaxConcurrency != 0 {
-			gcConfig["maxConcurrency"] = int64(gw.Spec.GC.Config.MaxConcurrency)
+			gcCollector["maxConcurrency"] = int64(gw.Spec.GC.Config.MaxConcurrency)
 		}
 		if gw.Spec.GC.Config.Logging != nil && gw.Spec.GC.Config.Logging.Verbosity != 0 {
-			gcConfig["logging"] = map[string]interface{}{
+			gc["logging"] = map[string]any{
 				"verbosity": int64(gw.Spec.GC.Config.Logging.Verbosity),
 			}
 		}
+	}
+	if len(gcCollector) > 0 {
+		gcConfig["collector"] = gcCollector
 	}
 	if len(gcConfig) > 0 {
 		gc["config"] = gcConfig
@@ -316,9 +342,9 @@ func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway, secretName string, imag
 
 	// PodMonitor
 	if gw.Spec.Monitoring != nil && gw.Spec.Monitoring.Enabled {
-		gc["podMonitor"] = map[string]interface{}{
+		gc["podMonitor"] = map[string]any{
 			"enabled": true,
-			"labels": map[string]interface{}{
+			"labels": map[string]any{
 				odhMonitoringScrapeLabel: odhMonitoringScrapeValue,
 			},
 		}
@@ -328,8 +354,8 @@ func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway, secretName string, imag
 
 	// --- Grafana ---
 	if gw.Spec.Grafana != nil {
-		vals["grafana"] = map[string]interface{}{
-			"dashboards": map[string]interface{}{
+		vals["grafana"] = map[string]any{
+			"dashboards": map[string]any{
 				"enabled": gw.Spec.Grafana.Enabled,
 			},
 		}
@@ -337,7 +363,7 @@ func specToHelmValues(gw *batchv1alpha1.LLMBatchGateway, secretName string, imag
 
 	// --- PrometheusRule ---
 	if gw.Spec.PrometheusRule != nil {
-		pr := map[string]interface{}{
+		pr := map[string]any{
 			"enabled": gw.Spec.PrometheusRule.Enabled,
 		}
 		if len(gw.Spec.PrometheusRule.Labels) > 0 {
@@ -428,11 +454,6 @@ func apiServerConfigToMap(cfg *batchv1alpha1.APIServerConfigSpec) map[string]int
 	if cfg.EnablePprof {
 		m["enablePprof"] = true
 	}
-	if cfg.Logging != nil && cfg.Logging.Verbosity != 0 {
-		m["logging"] = map[string]interface{}{
-			"verbosity": int64(cfg.Logging.Verbosity),
-		}
-	}
 	return m
 }
 
@@ -440,14 +461,20 @@ func mergeProcessorConfig(m map[string]interface{}, cfg *batchv1alpha1.Processor
 	if cfg.NumWorkers != 0 {
 		m["numWorkers"] = int64(cfg.NumWorkers)
 	}
-	if cfg.GlobalConcurrency != 0 {
-		m["globalConcurrency"] = int64(cfg.GlobalConcurrency)
-	}
-	if cfg.PerModelMaxConcurrency != 0 {
-		m["perModelMaxConcurrency"] = int64(cfg.PerModelMaxConcurrency)
-	}
-	if cfg.RecoveryMaxConcurrency != 0 {
-		m["recoveryMaxConcurrency"] = int64(cfg.RecoveryMaxConcurrency)
+	if cfg.Concurrency != nil {
+		concurrency := map[string]interface{}{}
+		if cfg.Concurrency.Global != 0 {
+			concurrency["global"] = int64(cfg.Concurrency.Global)
+		}
+		if cfg.Concurrency.PerEndpoint != 0 {
+			concurrency["perEndpoint"] = int64(cfg.Concurrency.PerEndpoint)
+		}
+		if cfg.Concurrency.Recovery != 0 {
+			concurrency["recovery"] = int64(cfg.Concurrency.Recovery)
+		}
+		if len(concurrency) > 0 {
+			m["concurrency"] = concurrency
+		}
 	}
 	setIfNotEmpty(m, "inferenceObjective", cfg.InferenceObjective)
 	if cfg.DefaultOutputExpirationSeconds != 0 {
@@ -458,11 +485,6 @@ func mergeProcessorConfig(m map[string]interface{}, cfg *batchv1alpha1.Processor
 	}
 	if cfg.EnablePprof {
 		m["enablePprof"] = true
-	}
-	if cfg.Logging != nil && cfg.Logging.Verbosity != 0 {
-		m["logging"] = map[string]interface{}{
-			"verbosity": int64(cfg.Logging.Verbosity),
-		}
 	}
 }
 
