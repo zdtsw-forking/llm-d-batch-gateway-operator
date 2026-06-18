@@ -18,6 +18,7 @@ COPY internal/ internal/
 COPY Makefile ./
 RUN if [ "${BUILD_TYPE}" = "CI" ]; then \
         # hermetic: chart provided by the Konflux prefetch step (path set by the downstream prefetch config).
+        pwd & ls -lat ; \
         cp -r prefetched-charts/batch-gateway /tmp/batch-gateway-chart; \
     else \
         make fetch-batch-gateway && \
