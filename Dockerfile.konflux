@@ -14,11 +14,6 @@ COPY cmd/ cmd/
 COPY api/ api/
 COPY internal/ internal/
 
-RUN mkdir -p bin && \
-    CGO_ENABLED=${CGO_ENABLED} GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    GOEXPERIMENT=strictfipsruntime \
-    go build -a -o bin/manager ./cmd/
-
 # Obtain the batch-gateway Helm chart into /tmp/batch-gateway-chart.
 COPY Makefile ./
 RUN if [ "${BUILD_TYPE}" = "CI" ]; then \
@@ -28,6 +23,11 @@ RUN if [ "${BUILD_TYPE}" = "CI" ]; then \
         make fetch-batch-gateway && \
         cp -r batch-gateway/charts/batch-gateway /tmp/batch-gateway-chart; \
     fi
+
+RUN mkdir -p bin && \
+CGO_ENABLED=${CGO_ENABLED} GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+GOEXPERIMENT=strictfipsruntime \
+go build -a -o bin/manager ./cmd/
 
 FROM registry.access.redhat.com/ubi9/ubi-minimal:9.7@sha256:d91be7cea9f03a757d69ad7fcdfcd7849dba820110e7980d5e2a1f46ed06ea3b
 WORKDIR /
