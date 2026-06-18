@@ -16,11 +16,10 @@ COPY internal/ internal/
 
 # Obtain the batch-gateway Helm chart into /tmp/batch-gateway-chart.
 COPY Makefile ./
-RUN if [ "${BUILD_TYPE}" = "CI" ]; then \
-        # hermetic: chart provided by the Konflux prefetch step (path set by the downstream prefetch config).
-        pwd & ls -lat ; \
-        cp -r prefetched-charts/batch-gateway /tmp/batch-gateway-chart; \
-    else \
+
+COPY Dockerfile prefetched-charts/batch-gateway/ /tmp/batch-gateway-chart
+
+RUN if [ "${BUILD_TYPE}" != "CI" ]; then \
         make fetch-batch-gateway && \
         cp -r batch-gateway/charts/batch-gateway /tmp/batch-gateway-chart; \
     fi
@@ -34,6 +33,7 @@ FROM registry.access.redhat.com/ubi9/ubi-minimal:9.7@sha256:907b68736aa798b2d382
 WORKDIR /
 COPY --from=builder /opt/app-root/src/bin/manager /manager
 COPY --from=builder /tmp/batch-gateway-chart /charts/batch-gateway/
+RUN rm -f /charts/batch-gateway/Dockerfile
 
 USER 1001:1001
 ENTRYPOINT ["/manager"]
