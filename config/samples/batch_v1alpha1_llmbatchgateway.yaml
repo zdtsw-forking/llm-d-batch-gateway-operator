@@ -26,7 +26,7 @@ spec:
     globalInferenceGateway:
       url: http://inference-gateway.default.svc:8000
       requestTimeout: 5m
-    dispatchMode: async  # set to sync if do not want to use async-processor
+    dispatchMode: async  # set to sync if you do not want to use async-processor
     asyncConfig:
       replicas: 1
       concurrency: 8

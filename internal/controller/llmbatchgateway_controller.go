@@ -158,9 +158,10 @@ func (r *LLMBatchGatewayReconciler) reconcile(ctx context.Context, req ctrl.Requ
 			conditionProcessorAvailable,
 			conditionGCAvailable,
 		}
-		// special handling as async is optional
 		if gw.Spec.Processor.DispatchMode == dispatchModeAsync {
 			condTypes = append(condTypes, conditionAsyncProcessorAvailable)
+		} else {
+			meta.RemoveStatusCondition(&gw.Status.Conditions, conditionAsyncProcessorAvailable)
 		}
 		for _, condType := range condTypes {
 			meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{

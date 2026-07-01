@@ -18,7 +18,8 @@ BATCH_GATEWAY_DIR  ?= batch-gateway
 
 ## Only the async-processor chart is sparse-checked-out from llm-d-async. TODO: update once graduated
 LLM_D_ASYNC_REPO ?= https://github.com/llm-d-incubation/llm-d-async.git
-LLM_D_ASYNC_REF  ?= v0.7.2 # TODO: once refactor is done reset to 'main'
+# TODO: once refactor is done reset to 'main'
+LLM_D_ASYNC_REF  ?= v0.7.2
 LLM_D_ASYNC_DIR  ?= llm-d-async
 
 ## Deps
@@ -165,26 +166,26 @@ fetch-batch-gateway: ## Fetch the full batch-gateway repo at BATCH_GATEWAY_REF (
 
 .PHONY: fetch-llm-d-async
 fetch-llm-d-async: ## Sparse-checkout only charts/async-processor from llm-d-async at LLM_D_ASYNC_REF.
-	@if ! git -C $(LLM_D_ASYNC_DIR) rev-parse --git-dir >/dev/null 2>&1; then \
+	@if ! git -C "$(LLM_D_ASYNC_DIR)" rev-parse --git-dir >/dev/null 2>&1; then \
 		echo "Cloning llm-d-async $(LLM_D_ASYNC_REF) from $(LLM_D_ASYNC_REPO) (sparse: charts/async-processor)"; \
-		git init -q $(LLM_D_ASYNC_DIR) && \
-		git -C $(LLM_D_ASYNC_DIR) sparse-checkout set --no-cone 'charts/async-processor/*' && \
-		git -C $(LLM_D_ASYNC_DIR) fetch -q --depth 1 $(LLM_D_ASYNC_REPO) $(LLM_D_ASYNC_REF) && \
-		git -C $(LLM_D_ASYNC_DIR) checkout -q FETCH_HEAD; \
-	elif [ "$$(git -C $(LLM_D_ASYNC_DIR) rev-parse HEAD)" = "$(LLM_D_ASYNC_REF)" ]; then \
+		git init -q "$(LLM_D_ASYNC_DIR)" && \
+		git -C "$(LLM_D_ASYNC_DIR)" sparse-checkout set --no-cone 'charts/async-processor/*' && \
+		git -C "$(LLM_D_ASYNC_DIR)" fetch -q --depth 1 "$(LLM_D_ASYNC_REPO)" "$(LLM_D_ASYNC_REF)" && \
+		git -C "$(LLM_D_ASYNC_DIR)" checkout -q FETCH_HEAD; \
+	elif [ "$$(git -C "$(LLM_D_ASYNC_DIR)" rev-parse HEAD)" = "$(LLM_D_ASYNC_REF)" ]; then \
 		echo "llm-d-async already at $(LLM_D_ASYNC_REF)"; \
 	else \
 		echo "Updating llm-d-async to $(LLM_D_ASYNC_REF) from $(LLM_D_ASYNC_REPO)"; \
-		git -C $(LLM_D_ASYNC_DIR) fetch -q --depth 1 $(LLM_D_ASYNC_REPO) $(LLM_D_ASYNC_REF) && \
-		git -C $(LLM_D_ASYNC_DIR) checkout -q FETCH_HEAD; \
+		git -C "$(LLM_D_ASYNC_DIR)" fetch -q --depth 1 "$(LLM_D_ASYNC_REPO)" "$(LLM_D_ASYNC_REF)" && \
+		git -C "$(LLM_D_ASYNC_DIR)" checkout -q FETCH_HEAD; \
 	fi
 
 .PHONY: sync-prefetched-charts
 sync-prefetched-charts: fetch-batch-gateway fetch-llm-d-async ## For downstream with konflux only
 	@rm -rf prefetched-charts/batch-gateway && mkdir -p prefetched-charts
-	@cp -r $(BATCH_GATEWAY_DIR)/charts/batch-gateway prefetched-charts/batch-gateway
+	@cp -r "$(BATCH_GATEWAY_DIR)/charts/batch-gateway" prefetched-charts/batch-gateway
 	@echo "synced prefetched-charts/batch-gateway at $(BATCH_GATEWAY_REF)"
 	@rm -rf prefetched-charts/async-processor && mkdir -p prefetched-charts
-	@cp -r $(LLM_D_ASYNC_DIR)/charts/async-processor prefetched-charts/async-processor
+	@cp -r "$(LLM_D_ASYNC_DIR)/charts/async-processor" prefetched-charts/async-processor
 	@echo "synced prefetched-charts/async-processor at $(LLM_D_ASYNC_REF)"
 
