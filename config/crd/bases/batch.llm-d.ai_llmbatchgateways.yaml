@@ -616,6 +616,27 @@ spec:
                         - gcp-pubsub
                         - gcp-pubsub-gated
                         type: string
+                      modelServerMonitor:
+                        properties:
+                          enabled:
+                            type: boolean
+                          interval:
+                            default: 15s
+                            pattern: ^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$
+                            type: string
+                          path:
+                            default: /metrics
+                            maxLength: 2048
+                            type: string
+                          port:
+                            default: modelserver
+                            maxLength: 253
+                            type: string
+                          selector:
+                            additionalProperties:
+                              type: string
+                            type: object
+                        type: object
                       prometheusCacheTTL:
                         description: PrometheusCacheTTL is the cache duration for
                           Prometheus query results (e.g. "30s").
@@ -790,6 +811,46 @@ spec:
                               otherwise to an implementation-defined value. Requests cannot exceed Limits.
                               More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
+                        type: object
+                      tls:
+                        properties:
+                          caCertKey:
+                            maxLength: 253
+                            type: string
+                          certKey:
+                            maxLength: 253
+                            type: string
+                          insecureSkipVerify:
+                            type: boolean
+                          keyKey:
+                            description: KeyKey is the key in the Secret holding the
+                              private key.
+                            maxLength: 253
+                            type: string
+                          secretName:
+                            maxLength: 253
+                            type: string
+                        type: object
+                      transformConfig:
+                        properties:
+                          requestTransforms:
+                            items:
+                              properties:
+                                name:
+                                  maxLength: 253
+                                  type: string
+                                parameters:
+                                  additionalProperties:
+                                    type: string
+                                  type: object
+                                type:
+                                  maxLength: 253
+                                  type: string
+                              required:
+                              - name
+                              - type
+                              type: object
+                            type: array
                         type: object
                       workerPools:
                         description: WorkerPools defines named worker pool configurations.

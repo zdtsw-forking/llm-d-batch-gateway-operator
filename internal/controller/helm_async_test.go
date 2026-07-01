@@ -117,6 +117,156 @@ func TestSpecToAsyncHelmValues_Monitoring(t *testing.T) {
 	}
 }
 
+func TestSpecToAsyncHelmValues_TLS(t *testing.T) {
+	gw := minimalAsyncGateway()
+	gw.Spec.Processor.AsyncConfig.TLS = &batchv1alpha1.AsyncTLSSpec{
+		SecretName:         "igw-tls",
+		InsecureSkipVerify: true,
+		CACertKey:          "ca.crt",
+		CertKey:            "tls.crt",
+		KeyKey:             "tls.key",
+	}
+	vals := specToAsyncHelmValues(gw, testSecretName(gw), testImages())
+	ap := vals["ap"].(map[string]any)
+	tls, ok := ap["tls"].(map[string]any)
+	if !ok {
+		t.Fatal("ap.tls not set")
+	}
+	if got := tls["secretName"]; got != "igw-tls" {
+		t.Errorf("tls.secretName = %v, want igw-tls", got)
+	}
+	if got := tls["insecureSkipVerify"]; got != true {
+		t.Errorf("tls.insecureSkipVerify = %v, want true", got)
+	}
+	if got := tls["keyKey"]; got != "tls.key" {
+		t.Errorf("tls.keyKey = %v, want tls.key", got)
+	}
+}
+
+func TestSpecToAsyncHelmValues_TransformConfig(t *testing.T) {
+	gw := minimalAsyncGateway()
+	gw.Spec.Processor.AsyncConfig.TransformConfig = &batchv1alpha1.AsyncTransformConfig{
+		RequestTransforms: []batchv1alpha1.AsyncRequestTransform{
+			{Name: "gcs-whisper", Type: "gcs_uri_multipart", Parameters: map[string]string{"providers": "whisper"}},
+		},
+	}
+	vals := specToAsyncHelmValues(gw, testSecretName(gw), testImages())
+	ap := vals["ap"].(map[string]any)
+	tc, ok := ap["transformConfig"].(map[string]any)
+	if !ok {
+		t.Fatal("ap.transformConfig not set")
+	}
+	transforms, ok := tc["requestTransforms"].([]any)
+	if !ok || len(transforms) != 1 {
+		t.Fatalf("requestTransforms length = %d, want 1", len(transforms))
+	}
+	tm := transforms[0].(map[string]any)
+	if got := tm["name"]; got != "gcs-whisper" {
+		t.Errorf("transform.name = %v, want gcs-whisper", got)
+	}
+	if got := tm["type"]; got != "gcs_uri_multipart" {
+		t.Errorf("transform.type = %v, want gcs_uri_multipart", got)
+	}
+}
+
+func TestSpecToAsyncHelmValues_ModelServerMonitor(t *testing.T) {
+	gw := minimalAsyncGateway()
+	gw.Spec.Processor.AsyncConfig.ModelServerMonitor = &batchv1alpha1.AsyncModelServerMonitorSpec{
+		Enabled:  true,
+		Selector: map[string]string{"llm-d.ai/role": "decode"},
+		Port:     "modelserver",
+		Path:     "/metrics",
+		Interval: "15s",
+	}
+	vals := specToAsyncHelmValues(gw, testSecretName(gw), testImages())
+	ap := vals["ap"].(map[string]any)
+	msm, ok := ap["modelServerMonitor"].(map[string]any)
+	if !ok {
+		t.Fatal("ap.modelServerMonitor not set")
+	}
+	if got := msm["enabled"]; got != true {
+		t.Errorf("modelServerMonitor.enabled = %v, want true", got)
+	}
+	if got := msm["port"]; got != "modelserver" {
+		t.Errorf("modelServerMonitor.port = %v, want modelserver", got)
+	}
+	sel, ok := msm["selector"].(map[string]any)
+	if !ok {
+		t.Fatal("modelServerMonitor.selector missing")
+	}
+	if got := sel["llm-d.ai/role"]; got != "decode" {
+		t.Errorf("selector[llm-d.ai/role] = %v, want decode", got)
+	}
+}
+
+func TestSpecToAsyncHelmValues_OTEL(t *testing.T) {
+	gw := minimalAsyncGateway()
+	gw.Spec.OTEL = &batchv1alpha1.OTELSpec{
+		Endpoint:     "http://jaeger:4317",
+		Insecure:     true,
+		Sampler:      "parentbased_traceidratio",
+		SamplerArg:   "0.1",
+		RedisTracing: false,
+	}
+	vals := specToAsyncHelmValues(gw, testSecretName(gw), testImages())
+	ap := vals["ap"].(map[string]any)
+	otel, ok := ap["otel"].(map[string]any)
+	if !ok {
+		t.Fatal("ap.otel not set")
+	}
+	if got := otel["endpoint"]; got != "http://jaeger:4317" {
+		t.Errorf("otel.endpoint = %v, want http://jaeger:4317", got)
+	}
+	if got := otel["insecure"]; got != true {
+		t.Errorf("otel.insecure = %v, want true", got)
+	}
+	if got := otel["redisTracing"]; got != false {
+		t.Errorf("otel.redisTracing = %v, want false", got)
+	}
+}
+
+func TestSpecToAsyncHelmValues_Grafana(t *testing.T) {
+	gw := minimalAsyncGateway()
+	gw.Spec.Grafana = &batchv1alpha1.GrafanaSpec{Enabled: true}
+	vals := specToAsyncHelmValues(gw, testSecretName(gw), testImages())
+	ap := vals["ap"].(map[string]any)
+	grafana, ok := ap["grafana"].(map[string]any)
+	if !ok {
+		t.Fatal("ap.grafana not set")
+	}
+	dashboards, ok := grafana["dashboards"].(map[string]any)
+	if !ok {
+		t.Fatal("ap.grafana.dashboards missing")
+	}
+	if got := dashboards["enabled"]; got != true {
+		t.Errorf("grafana.dashboards.enabled = %v, want true", got)
+	}
+}
+
+func TestSpecToAsyncHelmValues_PrometheusRule(t *testing.T) {
+	gw := minimalAsyncGateway()
+	gw.Spec.PrometheusRule = &batchv1alpha1.PrometheusRuleSpec{
+		Enabled: true,
+		Labels:  map[string]string{"team": "ml"},
+	}
+	vals := specToAsyncHelmValues(gw, testSecretName(gw), testImages())
+	ap := vals["ap"].(map[string]any)
+	pr, ok := ap["prometheusRule"].(map[string]any)
+	if !ok {
+		t.Fatal("ap.prometheusRule not set")
+	}
+	if got := pr["enabled"]; got != true {
+		t.Errorf("prometheusRule.enabled = %v, want true", got)
+	}
+	labels, ok := pr["labels"].(map[string]any)
+	if !ok {
+		t.Fatal("prometheusRule.labels missing")
+	}
+	if got := labels["team"]; got != "ml" {
+		t.Errorf("prometheusRule.labels[team] = %v, want ml", got)
+	}
+}
+
 func TestRenderAsyncChart(t *testing.T) {
 	renderer, err := NewHelmRenderer("../../llm-d-async/charts/async-processor", testImages())
 	if err != nil {

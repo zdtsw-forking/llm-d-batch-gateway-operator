@@ -66,6 +66,16 @@ type AsyncProcessorSpec struct {
 	// PrometheusCacheTTL is the cache duration for Prometheus query results (e.g. "30s").
 	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$`
 	PrometheusCacheTTL string `json:"prometheusCacheTTL,omitempty"`
+
+	// TLS configures TLS for connections to inference gateways.
+	TLS *AsyncTLSSpec `json:"tls,omitempty"`
+
+	// TransformConfig modifies request bodies before forwarding to the inference gateway.
+	// +optional
+	TransformConfig *AsyncTransformConfig `json:"transformConfig,omitempty"`
+
+	// ModelServerMonitor configs a PodMonitor that scrapes model server metrics.
+	ModelServerMonitor *AsyncModelServerMonitorSpec `json:"modelServerMonitor,omitempty"`
 }
 
 // AsyncRedisSpec configures the Redis message queue backend for the async-processor.
@@ -191,6 +201,60 @@ type AsyncTopicConfig struct {
 
 	// GateParams provides parameters for the gating mechanism of this topic.
 	GateParams map[string]string `json:"gateParams,omitempty"`
+}
+
+type AsyncTLSSpec struct {
+	// +kubebuilder:validation:MaxLength=253
+	SecretName string `json:"secretName,omitempty"`
+
+	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"`
+
+	// +kubebuilder:validation:MaxLength=253
+	CACertKey string `json:"caCertKey,omitempty"`
+
+	// +kubebuilder:validation:MaxLength=253
+	CertKey string `json:"certKey,omitempty"`
+
+	// KeyKey is the key in the Secret holding the private key.
+	// +kubebuilder:validation:MaxLength=253
+	KeyKey string `json:"keyKey,omitempty"`
+}
+
+type AsyncTransformConfig struct {
+	// +optional
+	RequestTransforms []AsyncRequestTransform `json:"requestTransforms,omitempty"`
+}
+
+type AsyncRequestTransform struct {
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=253
+	Type string `json:"type"`
+
+	// +optional
+	Parameters map[string]string `json:"parameters,omitempty"`
+}
+
+type AsyncModelServerMonitorSpec struct {
+	Enabled bool `json:"enabled,omitempty"`
+
+	// +optional
+	Selector map[string]string `json:"selector,omitempty"`
+
+	// +kubebuilder:default="modelserver"
+	// +kubebuilder:validation:MaxLength=253
+	Port string `json:"port,omitempty"`
+
+	// +kubebuilder:default="/metrics"
+	// +kubebuilder:validation:MaxLength=2048
+	Path string `json:"path,omitempty"`
+
+	// +kubebuilder:default="15s"
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$`
+	Interval string `json:"interval,omitempty"`
 }
 
 // AsyncWorkerPool defines a named worker pool configuration for the async-processor.

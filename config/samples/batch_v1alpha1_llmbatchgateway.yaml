@@ -22,6 +22,7 @@ spec:
     replicas: 1
   processor:
     replicas: 1
+    # globalInferenceGateway is only used in sync dispatch mode
     globalInferenceGateway:
       url: http://inference-gateway.default.svc:8000
       requestTimeout: 5m
@@ -50,6 +51,25 @@ spec:
           quota_key: "dispatch-quota"
       prometheusURL: http://prometheus:9090
       prometheusCacheTTL: 30s
+      # tls:
+      #   secretName: igw-tls-certs
+      #   insecureSkipVerify: false
+      #   caCertKey: ca.crt
+      #   certKey: tls.crt
+      #   keyKey: tls.key
+      # transformConfig:
+      #   requestTransforms:
+      #   - name: gcs-whisper
+      #     type: gcs_uri_multipart
+      #     parameters:
+      #       providers: whisper
+      # modelServerMonitor:
+      #   enabled: true
+      #   selector:
+      #     llm-d.ai/role: decode
+      #   port: modelserver
+      #   path: /metrics
+      #   interval: 15s
   gc:
     interval: 30m
 ---

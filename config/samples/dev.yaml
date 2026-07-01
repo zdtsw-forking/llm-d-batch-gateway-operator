@@ -19,6 +19,7 @@ spec:
   processor:
     replicas: 1
     imagePullPolicy: IfNotPresent
+    # globalInferenceGateway is only used in sync dispatch mode
     globalInferenceGateway:
       url: http://vllm-sim.default.svc.cluster.local:8000
       requestTimeout: 5m
@@ -38,6 +39,25 @@ spec:
         requestPathURL: /v1/completions
         pollIntervalMs: 1000
         batchSize: 10
+      # tls: # requires TLS secret 
+      #   secretName: igw-tls-certs
+      #   insecureSkipVerify: false
+      #   caCertKey: ca.crt
+      #   certKey: tls.crt
+      #   keyKey: tls.key
+      transformConfig:
+        requestTransforms:
+        - name: gcs-whisper
+          type: gcs_uri_multipart
+          parameters:
+            providers: whisper
+      # modelServerMonitor: # PodMonitor CRD not available in Kind, comment this block out
+      #   enabled: true
+      #   selector:
+      #     llm-d.ai/role: decode
+      #   port: modelserver
+      #   path: /metrics
+      #   interval: 15s
   gc:
     interval: 30m
     imagePullPolicy: IfNotPresent
